@@ -2,10 +2,20 @@ module Demo exposing (main)
 
 import Html
 import Translation exposing (asStringWith)
-import Translations.Branches.Conflicts exposing (..)
+import Translations.Feature exposing (..)
 
 
 main =
-    conflictCount
-        |> asStringWith { count = 1 }
-        |> Html.text
+    Html.div
+        []
+        [ Html.div []
+            [ greeting
+                |> asStringWith { name = "Alice" }
+                |> Html.text
+            ]
+        , Html.div []
+            [ emailInfo
+                |> asStringWith { count = 1 }
+                |> Html.text
+            ]
+        ]
