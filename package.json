@@ -1,0 +1,20 @@
+{
+  "name": "elm-translation-runner",
+  "version": "0.0.1",
+  "description": "Generate Elm translation modules from JSON and vice versa",
+  "keywords": [],
+  "main": "index.js",
+  "dependencies": {
+    "node-elm-compiler": "^4.4.0",
+    "yargs": "^11.0.0",
+    "mkdirp": "^0.5.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kirchner/elm-translation-runner"
+  },
+  "license": "Apache-2.0",
+  "bin": {
+    "elm-translation": "index.js"
+  }
+}
