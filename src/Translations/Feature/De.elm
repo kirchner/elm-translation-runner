@@ -1,24 +1,24 @@
-module Translations.Feature exposing (..)
+module Translations.Feature.De exposing (..)
 
 import Translation exposing (..)
-import Translation.En exposing (..)
+import Translation.De exposing (..)
 
 
 emailInfo : Translation { args | count : Float } msg
 emailInfo =
     final "emailInfo" <|
         concat
-            [ s "You have "
+            [ s "Du hast "
             , cardinal decimalStandard .count "count" <|
                 { one =
                     concat
                         [ count
-                        , s " new email"
+                        , s " neue Email"
                         ]
                 , other =
                     concat
                         [ count
-                        , s " new emails"
+                        , s " neue Emails"
                         ]
                 }
             , s "."
@@ -29,7 +29,7 @@ greeting : Translation { args | name : String } msg
 greeting =
     final "greeting" <|
         concat
-            [ s "Good morning, "
+            [ s "Guten morgen, "
             , string .name "name"
             , s "!"
             ]

@@ -2,7 +2,7 @@ module Demo exposing (main)
 
 import Html
 import Translation exposing (asStringWith)
-import Translations.Feature exposing (..)
+import Translations.Feature.De exposing (..)
 
 
 main =

@@ -9,7 +9,13 @@ import String.Extra as String
 import Translation exposing (ArgType(..))
 
 
-main : Program { rawJson : String } {} msg
+type alias Flags =
+    { modulePrefix : String
+    , locales : List { locale : String, rawJson : String }
+    }
+
+
+main : Program Flags {} msg
 main =
     programWithFlags
         { init = init
@@ -18,17 +24,25 @@ main =
         }
 
 
-init : { rawJson : String } -> ( {}, Cmd msg )
-init { rawJson } =
+init : Flags -> ( {}, Cmd msg )
+init { modulePrefix, locales } =
     ( {}
-    , case Decode.decodeString directoryDecoder rawJson of
+    , locales
+        |> List.map (generateLocaleModules modulePrefix)
+        |> Cmd.batch
+    )
+
+
+generateLocaleModules : String -> { locale : String, rawJson : String } -> Cmd msg
+generateLocaleModules modulePrefix { locale, rawJson } =
+    case Decode.decodeString directoryDecoder rawJson of
         Ok directory ->
             directory
                 |> collectMessages []
                 |> Dict.map
                     (\scope messages ->
                         [ ( "scope"
-                          , scope
+                          , (modulePrefix :: (scope ++ [ locale ]))
                                 |> List.map
                                     (String.toSentenceCase
                                         >> String.camelize
@@ -37,7 +51,7 @@ init { rawJson } =
                                 |> Encode.list
                           )
                         , ( "content"
-                          , generateModule scope messages
+                          , generateModule (modulePrefix :: scope) locale messages
                                 |> Encode.string
                           )
                         ]
@@ -49,7 +63,6 @@ init { rawJson } =
 
         Err error ->
             Debug.crash error
-    )
 
 
 
@@ -109,15 +122,15 @@ collectMessages scope directory =
 ---- CODE GENERATION
 
 
-generateModule : List String -> Dict String String -> String
-generateModule scope messages =
+generateModule : List String -> String -> Dict String String -> String
+generateModule scope locale messages =
     [ [ [ "module"
-        , moduleName scope
+        , moduleName (scope ++ [ locale ])
         , "exposing (..)"
         ]
             |> String.join " "
       , [ "import Translation exposing (..)"
-        , "import Translation.En exposing (..)"
+        , "import Translation." ++ String.toSentenceCase locale ++ " exposing (..)"
         ]
             |> String.join "\n"
       ]
@@ -187,7 +200,6 @@ generateMessage name icuMessage =
 
 
 moduleName : List String -> String
-moduleName names =
-    ("Translations" :: names)
-        |> List.map (String.toSentenceCase >> String.camelize)
-        |> String.join "."
+moduleName =
+    List.map (String.toSentenceCase >> String.camelize)
+        >> String.join "."

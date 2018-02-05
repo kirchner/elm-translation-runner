@@ -1,0 +1,14 @@
+{
+    "source-directory": "./src",
+    "module-prefix": "Translations",
+    "translation-files": [
+        {
+            "path": "./translations/de.json",
+            "locale": "de"
+        },
+        {
+            "path": "./translations/en.json",
+            "locale": "en"
+        }
+    ]
+}
