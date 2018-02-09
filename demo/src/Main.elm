@@ -1,4 +1,4 @@
-module Demo exposing (main)
+module Main exposing (main)
 
 import Html
 import Translation exposing (asStringWith)
