@@ -1,6 +1,6 @@
 module Translations.Feature exposing (..)
 
-import Locales exposing (..)
+import Translations.Locales exposing (..)
 import Translation exposing (Translation)
 import Translations.Feature.De as De exposing (..)
 import Translations.Feature.En as En exposing (..)

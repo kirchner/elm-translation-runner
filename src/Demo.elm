@@ -1,9 +1,9 @@
 module Demo exposing (main)
 
 import Html
-import Locales exposing (..)
 import Translation exposing (asStringWith)
 import Translations.Feature exposing (..)
+import Translations.Locales exposing (..)
 
 
 main =

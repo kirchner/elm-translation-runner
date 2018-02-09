@@ -28,21 +28,50 @@ main =
 init : Flags -> ( {}, Cmd msg )
 init { modulePrefix, locales } =
     ( {}
-    , [ locales
-            |> List.map (generateLocaleModules modulePrefix)
-            |> Cmd.batch
-      , case collect locales of
+    , [ case collectTranslations locales of
             Ok byScope ->
-                [ byScope
-                    |> Dict.map
-                        (generateTranslationModule modulePrefix
-                            (allLocales byScope)
-                        )
-                    |> Dict.values
+                let
+                    allLocales =
+                        collectLocales byScope
+
+                    translationsList =
+                        byScope
+                            |> Dict.toList
+                            |> List.map
+                                (\( scope, byKey ) ->
+                                    let
+                                        scopeLength =
+                                            List.length scope
+                                    in
+                                    case
+                                        ( List.take (scopeLength - 1) scope
+                                        , List.drop (scopeLength - 1) scope
+                                        )
+                                    of
+                                        ( modules, name :: [] ) ->
+                                            ( Module modules name
+                                            , Dict.toList byKey
+                                            )
+
+                                        _ ->
+                                            Debug.crash "should not happen!"
+                                )
+
+                    modules =
+                        modulePrefix
+                            |> String.split "."
+                in
+                [ translationsList
+                    |> translationsRouterFiles modules allLocales
+                    |> List.map writeFile
                     |> Cmd.batch
-                , byScope
-                    |> allLocales
-                    |> generateLocalesModule
+                , translationsList
+                    |> translationsFiles modules allLocales
+                    |> List.map writeFile
+                    |> Cmd.batch
+                , allLocales
+                    |> localesFile modules
+                    |> writeFile
                 ]
                     |> Cmd.batch
 
@@ -54,7 +83,34 @@ init { modulePrefix, locales } =
 
 
 
----- COLLECT MESSAGES
+---- FILES
+
+
+type alias File =
+    { directory : List String
+    , name : String
+    , content : String
+    }
+
+
+writeFile : File -> Cmd msg
+writeFile { directory, name, content } =
+    [ ( "scope"
+      , (directory ++ [ name ])
+            |> List.map Encode.string
+            |> Encode.list
+      )
+    , ( "content"
+      , content
+            |> Encode.string
+      )
+    ]
+        |> Encode.object
+        |> Ports.writeModule
+
+
+
+---- TRANSLATIONS
 
 
 type alias Scope =
@@ -70,33 +126,28 @@ type alias Key =
 
 
 type Directory
-    = Directory (Dict Key Directory)
+    = Directory (List ( Key, Directory ))
     | Entry String
 
 
-allLocales : Dict Scope (Dict Key (Dict Locale String)) -> Set String
-allLocales translations =
-    translations
-        |> Dict.values
-        |> List.foldl
-            (\byKey locales ->
-                byKey
-                    |> Dict.values
-                    |> List.foldl
-                        (\byLocale locales ->
-                            byLocale
-                                |> Dict.keys
-                                |> List.foldl Set.insert locales
-                        )
-                        locales
-            )
-            Set.empty
+directoryDecoder : Decoder Directory
+directoryDecoder =
+    Decode.oneOf
+        [ Decode.keyValuePairs (Decode.lazy (\_ -> directoryDecoder))
+            |> Decode.map Directory
+        , Decode.string
+            |> Decode.map Entry
+        ]
 
 
-collect :
+
+---- COLLECT TRANSLATIONS
+
+
+collectTranslations :
     List { locale : String, rawJson : String }
     -> Result String (Dict Scope (Dict Key (Dict Locale String)))
-collect rawData =
+collectTranslations rawData =
     rawData
         |> List.map
             (\{ locale, rawJson } ->
@@ -104,7 +155,7 @@ collect rawData =
                     Ok (Directory entries) ->
                         Ok
                             ( locale
-                            , collectMessages entries
+                            , translationsByScope entries
                             )
 
                     Ok _ ->
@@ -135,48 +186,13 @@ collect rawData =
                         listResult
             )
             (Ok [])
-        |> Result.map collectTranslations
+        |> Result.map collectTranslationsHelp
 
 
-directoryDecoder : Decoder Directory
-directoryDecoder =
-    Decode.oneOf
-        [ Decode.dict (Decode.lazy (\_ -> directoryDecoder))
-            |> Decode.map Directory
-        , Decode.string
-            |> Decode.map Entry
-        ]
-
-
-collectMessages : Dict String Directory -> Dict Scope (Dict Key String)
-collectMessages entries =
-    entries
-        |> Dict.map (collectMessagesHelp [])
-        |> Dict.values
-        |> List.foldr merge Dict.empty
-
-
-collectMessagesHelp :
-    List String
-    -> String
-    -> Directory
-    -> Dict (List String) (Dict String String)
-collectMessagesHelp scope name directory =
-    case directory of
-        Entry newMessage ->
-            Dict.singleton (List.reverse scope) (Dict.singleton name newMessage)
-
-        Directory entries ->
-            entries
-                |> Dict.map (collectMessagesHelp (name :: scope))
-                |> Dict.values
-                |> List.foldr merge Dict.empty
-
-
-collectTranslations :
+collectTranslationsHelp :
     List ( Locale, Dict Scope (Dict Key String) )
     -> Dict Scope (Dict Key (Dict Locale String))
-collectTranslations translations =
+collectTranslationsHelp translations =
     translations
         |> List.foldl
             (\( locale, translationsByScope ) collected ->
@@ -201,18 +217,62 @@ collectTranslations translations =
             Dict.empty
 
 
+translationsByScope : List ( Key, Directory ) -> Dict Scope (Dict Key String)
+translationsByScope entries =
+    entries
+        |> List.map (uncurry (translationsByScopeHelp []))
+        |> List.foldr merge Dict.empty
 
----- GENERATE LOCALES MODULE
+
+translationsByScopeHelp :
+    List String
+    -> Key
+    -> Directory
+    -> Dict (List String) (Dict String String)
+translationsByScopeHelp scope name directory =
+    case directory of
+        Entry newMessage ->
+            Dict.singleton (List.reverse scope) (Dict.singleton name newMessage)
+
+        Directory entries ->
+            entries
+                |> List.map (uncurry (translationsByScopeHelp (name :: scope)))
+                |> List.foldr merge Dict.empty
 
 
-generateLocalesModule : Set String -> Cmd msg
-generateLocalesModule locales =
-    [ ( "scope"
-      , [ Encode.string "Locales" ]
-            |> Encode.list
-      )
-    , ( "content"
-      , [ "module Locales exposing (..)"
+
+---- COLLECT LOCALES
+
+
+collectLocales : Dict Scope (Dict Key (Dict Locale String)) -> Set String
+collectLocales translations =
+    translations
+        |> Dict.values
+        |> List.foldl
+            (\byKey locales ->
+                byKey
+                    |> Dict.values
+                    |> List.foldl
+                        (\byLocale locales ->
+                            byLocale
+                                |> Dict.keys
+                                |> List.foldl Set.insert locales
+                        )
+                        locales
+            )
+            Set.empty
+
+
+
+---- GENERATE LOCALES MODULE FILE
+
+
+localesFile : List String -> Set String -> File
+localesFile modules locales =
+    { directory = modules
+    , name = "Locales"
+    , content =
+        [ generateModuleDeclaration modules "Locales"
         , [ "type Locale"
           , [ "= "
             , locales
@@ -226,81 +286,61 @@ generateLocalesModule locales =
             |> String.join "\n"
         ]
             |> String.join "\n\n\n"
-            |> Encode.string
-      )
-    ]
-        |> Encode.object
-        |> Ports.writeModule
+    }
 
 
 
----- GENERATE TRANSLATION MODULES
+---- GENERATE TRANSLATIONS ROUTER MODULE FILES
 
 
-generateTranslationModules :
-    String
+type Module
+    = Module (List String) String
+
+
+translationsRouterFiles :
+    List String
     -> Set String
-    -> Dict Scope (Dict Key (Dict Locale String))
-    -> Cmd msg
-generateTranslationModules modulePrefix locales byScope =
-    byScope
-        |> Dict.map (generateTranslationModule modulePrefix locales)
-        |> Dict.values
-        |> Cmd.batch
+    -> List ( Module, List ( Key, Dict Locale String ) )
+    -> List File
+translationsRouterFiles modules locales translations =
+    List.map
+        (uncurry (translationsRouterFile modules locales))
+        translations
 
 
-generateTranslationModule :
-    String
+translationsRouterFile :
+    List String
     -> Set String
-    -> Scope
-    -> Dict Key (Dict Locale String)
-    -> Cmd msg
-generateTranslationModule modulePrefix locales scope byKey =
-    [ ( "scope"
-      , (modulePrefix :: scope)
-            |> List.map
-                (String.toSentenceCase
-                    >> String.camelize
-                    >> Encode.string
-                )
-            |> Encode.list
-      )
-    , ( "content"
-      , [ [ [ "module"
-            , moduleName (modulePrefix :: scope)
-            , "exposing (..)"
-            ]
-                |> String.join " "
-          , [ "import Locales exposing (..)"
-            , "import Translation exposing (Translation)"
+    -> Module
+    -> List ( Key, Dict Locale String )
+    -> File
+translationsRouterFile modules locales (Module scope name) translations =
+    let
+        actualName =
+            String.toSentenceCase name
+    in
+    { directory = modules ++ scope
+    , name = actualName
+    , content =
+        [ [ generateModuleDeclaration (modules ++ scope) actualName
+          , [ [ generateImport modules "Locales"
+              , generateImportExposing [ "Translation" ] [] "Translation"
+              ]
             , locales
                 |> Set.toList
-                |> List.map
-                    (\locale ->
-                        [ "import"
-                        , moduleName (modulePrefix :: scope ++ [ locale ])
-                        , "as"
-                        , String.toSentenceCase locale
-                        , "exposing (..)"
-                        ]
-                            |> String.join " "
-                    )
-                |> String.join "\n"
+                |> List.map String.toSentenceCase
+                |> List.map (generateQualifiedImport (modules ++ scope ++ [ actualName ]))
             ]
-                |> String.join "\n"
+                |> List.concat
+                |> joinLines
           ]
-            |> String.join "\n\n"
-        , byKey
-            |> Dict.map (generateTranslationFunction locales)
-            |> Dict.values
-            |> String.join "\n\n\n"
+            |> joinLinesWith 1
+        , translations
+            |> List.map (uncurry (generateTranslationFunction locales))
+            |> joinLinesWith 2
         ]
-            |> String.join "\n\n\n"
-            |> Encode.string
-      )
-    ]
-        |> Encode.object
-        |> Ports.writeModule
+            |> joinLinesWith 2
+    }
 
 
 generateTranslationFunction : Set String -> Key -> Dict Locale String -> String
@@ -332,75 +372,92 @@ generateTranslationFunction locales key byLocale =
                         |> String.concat
                         |> indent
                     ]
-                        |> String.join "\n"
+                        |> joinLines
                 )
-            |> String.join "\n\n"
+            |> joinLinesWith 1
             |> indent
       ]
-        |> String.join "\n"
+        |> joinLines
         |> indent
     ]
-        |> String.join "\n"
+        |> joinLines
 
 
 
----- GENERATE LOCALE MODULES
+---- GENERATE TRANSLATIONS MODULE FILES
 
 
-generateLocaleModules : String -> { locale : String, rawJson : String } -> Cmd msg
-generateLocaleModules modulePrefix { locale, rawJson } =
-    case Decode.decodeString directoryDecoder rawJson of
-        Ok (Directory entries) ->
-            entries
-                |> collectMessages
-                |> Dict.map
-                    (\scope messages ->
-                        [ ( "scope"
-                          , (modulePrefix :: (scope ++ [ locale ]))
-                                |> List.map
-                                    (String.toSentenceCase
-                                        >> String.camelize
-                                        >> Encode.string
-                                    )
-                                |> Encode.list
-                          )
-                        , ( "content"
-                          , generateModule (modulePrefix :: scope) locale messages
-                                |> Encode.string
-                          )
-                        ]
-                            |> Encode.object
-                            |> Ports.writeModule
-                    )
-                |> Dict.values
-                |> Cmd.batch
-
-        Ok _ ->
-            Debug.crash "no translations present"
-
-        Err error ->
-            Debug.crash error
+translationsFiles :
+    List String
+    -> Set Locale
+    -> List ( Module, List ( Key, Dict Locale String ) )
+    -> List File
+translationsFiles modules locales translations =
+    locales
+        |> Set.toList
+        |> List.map (translationsFilesForLocale modules translations)
+        |> List.concat
 
 
-generateModule : List String -> String -> Dict String String -> String
-generateModule scope locale messages =
-    [ [ [ "module"
-        , moduleName (scope ++ [ locale ])
-        , "exposing (..)"
-        ]
-            |> String.join " "
-      , [ "import Translation exposing (..)"
-        , "import Translation." ++ String.toSentenceCase locale ++ " exposing (..)"
-        ]
-            |> String.join "\n"
-      ]
-        |> String.join "\n\n"
-    , messages
-        |> Dict.toList
-        |> List.filterMap (uncurry generateMessage)
-        |> String.join "\n\n\n"
-    ]
-        |> String.join "\n\n\n"
+translationsFilesForLocale :
+    List String
+    -> List ( Module, List ( Key, Dict Locale String ) )
+    -> Locale
+    -> List File
+translationsFilesForLocale modules translations locale =
+    translations
+        |> List.map (uncurry (translationsFileForLocale modules locale))
+
+
+translationsFileForLocale :
+    List String
+    -> Locale
+    -> Module
+    -> List ( Key, Dict Locale String )
+    -> File
+translationsFileForLocale modules locale (Module scope name) translations =
+    let
+        maybeTranslationsDict =
+            translations
+                |> List.foldl insertTranslation (Just Dict.empty)
+
+        insertTranslation ( key, byLocale ) =
+            Maybe.andThen
+                (\dict ->
+                    Dict.get locale byLocale
+                        |> Maybe.map (flip (Dict.insert key) dict)
+                )
+
+        actualModules =
+            (modules ++ scope ++ [ name ])
+                |> List.map String.toSentenceCase
+
+        actualModule =
+            String.toSentenceCase locale
+    in
+    case maybeTranslationsDict of
+        Just translationsDict ->
+            { directory = actualModules
+            , name = actualModule
+            , content =
+                [ [ generateModuleDeclaration actualModules
+                        (String.toSentenceCase locale)
+                  , [ generateImport [] "Translation"
+                    , generateImport [ "Translation" ] actualModule
+                    ]
+                        |> joinLines
+                  ]
+                    |> joinLinesWith 1
+                , translationsDict
+                    |> Dict.toList
+                    |> List.filterMap (uncurry generateMessage)
+                    |> joinLinesWith 2
+                ]
+                    |> joinLinesWith 2
+            }
+
+        Nothing ->
+            Debug.crash "TODO"
 
 
 generateMessage : String -> String -> Maybe String
@@ -490,9 +547,82 @@ merge dictA dictB =
         Dict.empty
 
 
+
+---- CODE GENERATION HELPER
+
+
 indent : String -> String
 indent text =
     text
         |> String.split "\n"
         |> List.map (\line -> "    " ++ line)
         |> String.join "\n"
+
+
+joinLines : List String -> String
+joinLines =
+    joinLinesWith 0
+
+
+joinLinesWith : Int -> List String -> String
+joinLinesWith lineBreakCount lines =
+    let
+        lineBreaks =
+            "\n"
+                |> List.repeat (lineBreakCount + 1)
+                |> String.concat
+    in
+    lines
+        |> String.join lineBreaks
+
+
+generateModuleDeclaration : List String -> String -> String
+generateModuleDeclaration modules name =
+    [ "module"
+    , modules
+        ++ [ name ]
+        |> String.join "."
+    , "exposing (..)"
+    ]
+        |> String.join " "
+
+
+generateImport : List String -> String -> String
+generateImport modules name =
+    [ "import"
+    , modules
+        ++ [ name ]
+        |> String.join "."
+    , "exposing (..)"
+    ]
+        |> String.join " "
+
+
+generateImportExposing : List String -> List String -> String -> String
+generateImportExposing exposed modules name =
+    [ "import"
+    , modules
+        ++ [ name ]
+        |> String.join "."
+    , "exposing"
+    , [ "("
+      , exposed
+            |> String.join ", "
+      , ")"
+      ]
+        |> String.concat
+    ]
+        |> String.join " "
+
+
+generateQualifiedImport : List String -> String -> String
+generateQualifiedImport modules name =
+    [ "import"
+    , modules
+        ++ [ name ]
+        |> String.join "."
+    , "as"
+    , String.toSentenceCase name
+    , "exposing (..)"
+    ]
+        |> String.join " "
