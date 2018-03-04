@@ -318,18 +318,23 @@ translationsRouterFile modules locales (Module scope name) translations =
     let
         actualName =
             String.toSentenceCase name
+
+        actualModules =
+            (modules ++ scope)
+                |> List.map String.toSentenceCase
     in
-    { directory = modules ++ scope
+    { directory = actualModules
     , name = actualName
     , content =
-        [ [ generateModuleDeclaration (modules ++ scope) actualName
+        [ [ generateModuleDeclaration actualModules (String.toSentenceCase actualName)
           , [ [ generateImport modules "Locales"
               , generateImportExposing [ "Translation" ] [] "Translation"
+              , generateImportExposing [ "Node" ] [] "VirtualDom"
               ]
             , locales
                 |> Set.toList
                 |> List.map String.toSentenceCase
-                |> List.map (generateQualifiedImport (modules ++ scope ++ [ actualName ]))
+                |> List.map (generateQualifiedImport (actualModules ++ [ actualName ]))
             ]
                 |> List.concat
                 |> joinLines
@@ -443,6 +448,7 @@ translationsFileForLocale modules locale (Module scope name) translations =
                 [ [ generateModuleDeclaration actualModules
                         (String.toSentenceCase locale)
                   , [ generateImport [] "Translation"
+                    , generateImportExposing [ "Node" ] [] "VirtualDom"
                     , generateImport [ "Translation" ] actualModule
                     ]
                         |> joinLines

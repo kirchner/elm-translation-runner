@@ -1,6 +1,7 @@
 module Translations.Feature.En exposing (..)
 
 import Translation exposing (..)
+import VirtualDom exposing (Node)
 import Translation.En exposing (..)
 
 
