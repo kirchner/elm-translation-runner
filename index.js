@@ -63,8 +63,8 @@ var generateElm = function() {
 
     var config = JSON.parse(data)
 
-    compile(["src/Main.elm"], { output: "main.js" })
-      .on("close", function(exitCode) {
+    //compile(["src/Main.elm"], { output: "main.js" })
+    //  .on("close", function(exitCode) {
         var Elm = require("./main.js");
 
         var locales = [];
@@ -77,6 +77,7 @@ var generateElm = function() {
 
           locales.push({
             "locale": locale,
+            "fileName": path,
             "rawJson": rawJson
           });
         });
@@ -110,7 +111,15 @@ var generateElm = function() {
             }
           });
         });
-      });
+
+        worker.ports.reportError.subscribe(function(data) {
+          var errorMsg = data["error"];
+
+          console.log(errorMsg);
+
+          process.exit(1);
+        });
+      //});
   });
 };
 

@@ -1,8 +1,11 @@
 module Main exposing (main)
 
+import Char
 import Dict exposing (Dict)
+import Error
 import Json.Decode as Decode exposing (Decoder)
 import Json.Encode as Encode
+import Parser
 import Platform exposing (programWithFlags)
 import Ports
 import Set exposing (Set)
@@ -12,7 +15,12 @@ import Translation exposing (ArgType(..))
 
 type alias Flags =
     { modulePrefix : String
-    , locales : List { locale : String, rawJson : String }
+    , locales :
+        List
+            { locale : String
+            , fileName : String
+            , rawJson : String
+            }
     }
 
 
@@ -28,58 +36,104 @@ main =
 init : Flags -> ( {}, Cmd msg )
 init { modulePrefix, locales } =
     ( {}
-    , [ case collectTranslations locales of
-            Ok byScope ->
+    , collectTranslations locales
+        |> Result.andThen
+            (\byScope ->
                 let
                     allLocales =
                         collectLocales byScope
-
-                    translationsList =
-                        byScope
-                            |> Dict.toList
-                            |> List.map
-                                (\( scope, byKey ) ->
-                                    let
-                                        scopeLength =
-                                            List.length scope
-                                    in
-                                    case
-                                        ( List.take (scopeLength - 1) scope
-                                        , List.drop (scopeLength - 1) scope
-                                        )
-                                    of
-                                        ( modules, name :: [] ) ->
-                                            ( Module modules name
-                                            , Dict.toList byKey
-                                            )
-
-                                        _ ->
-                                            Debug.crash "should not happen!"
-                                )
-
-                    modules =
-                        modulePrefix
-                            |> String.split "."
                 in
-                [ translationsList
-                    |> translationsRouterFiles modules allLocales
-                    |> List.map writeFile
-                    |> Cmd.batch
-                , translationsList
-                    |> translationsFiles modules allLocales
-                    |> List.map writeFile
-                    |> Cmd.batch
-                , allLocales
-                    |> localesFile modules
-                    |> writeFile
-                ]
-                    |> Cmd.batch
+                parseModulePrefix modulePrefix
+                    |> Result.andThen
+                        (\{ modules, root } ->
+                            let
+                                translationsList =
+                                    collectTranslationsList modules root byScope
+                            in
+                            translationsList
+                                |> translationsFiles modules allLocales
+                                |> Result.map
+                                    (\files ->
+                                        [ translationsList
+                                            |> translationsRouterFiles modules allLocales
+                                            |> List.map writeFile
+                                            |> Cmd.batch
+                                        , files
+                                            |> List.map writeFile
+                                            |> Cmd.batch
+                                        , allLocales
+                                            |> localesFile modules
+                                            |> writeFile
+                                        ]
+                                            |> Cmd.batch
+                                    )
+                        )
+            )
+        |> (\result ->
+                case result of
+                    Ok cmd ->
+                        cmd
 
-            Err error ->
-                Cmd.none
-      ]
-        |> Cmd.batch
+                    Err error ->
+                        error
+                            |> reportError
+           )
     )
+
+
+parseModulePrefix : String -> Result Error { modules : List String, root : String }
+parseModulePrefix modulePrefix =
+    case
+        modulePrefix
+            |> String.split "."
+            |> List.reverse
+    of
+        root :: modules ->
+            Ok
+                { modules = List.reverse modules
+                , root = root
+                }
+
+        [] ->
+            Err (InvalidModulePrefix modulePrefix)
+
+
+collectTranslationsList :
+    List String
+    -> String
+    -> Dict Scope (Dict Key (Dict Locale String))
+    -> List ( Module, List ( String, Dict Locale String ) )
+collectTranslationsList modules root byScope =
+    let
+        allLocales =
+            collectLocales byScope
+    in
+    byScope
+        |> Dict.toList
+        |> List.map
+            (\( scope, byKey ) ->
+                let
+                    scopeLength =
+                        List.length scope
+                in
+                case
+                    ( List.take (scopeLength - 1) scope
+                    , List.drop (scopeLength - 1) scope
+                    )
+                of
+                    ( modules, name :: [] ) ->
+                        ( Module (modules ++ [ root ]) name
+                        , Dict.toList byKey
+                        )
+
+                    ( modules, [] ) ->
+                        ( Module modules root
+                        , Dict.toList byKey
+                        )
+
+                    _ ->
+                        Debug.crash "should not happen"
+            )
 
 
 
@@ -107,6 +161,135 @@ writeFile { directory, name, content } =
     ]
         |> Encode.object
         |> Ports.writeModule
+
+
+
+---- ERRORS
+
+
+type Error
+    = Errors (List Error)
+    | InvalidModulePrefix String
+    | MissingTranslations
+        { locale : String
+        , missingKeys : List String
+        }
+    | IcuSyntaxError
+        { file : String
+        , key : List String
+        , error : Parser.Error
+        }
+    | JSONSyntaxError
+        { fileName : String
+        , locale : String
+        , errorMsg : String
+        }
+    | NoTranslationsError
+        { fileName : String
+        , locale : String
+        }
+
+
+reportError : Error -> Cmd msg
+reportError error =
+    [ ( "error"
+      , error
+            |> printError
+            |> Encode.string
+      )
+    ]
+        |> Encode.object
+        |> Ports.reportError
+
+
+printError : Error -> String
+printError error =
+    let
+        title name location =
+            [ "\x1B[36m--"
+            , name
+                |> String.map Char.toUpper
+            , "-"
+                |> List.repeat (80 - 4 - String.length name - String.length location)
+                |> String.concat
+            , location
+            , "\x1B[0m"
+            ]
+                |> String.join " "
+    in
+    case error of
+        Errors errors ->
+            errors
+                |> List.map printError
+                |> String.join "\n\n"
+
+        InvalidModulePrefix modulePrefix ->
+            [ title "invalid module prefix" ""
+            , [ "The module prefix '"
+              , modulePrefix
+              , "' is invalid. 'Data.Translations' is an example for a valid module prefix."
+              ]
+                |> String.concat
+                |> String.softWrap 80
+            ]
+                |> String.join "\n\n"
+
+        IcuSyntaxError { file, key, error } ->
+            [ title "syntax error" file
+            , error
+                |> Error.print
+            ]
+                |> String.join "\n\n"
+
+        MissingTranslations { locale, missingKeys } ->
+            [ title "missing translations" ""
+            , [ [ "The locale '"
+                , locale
+                , "' is missing translations, which are given in another locale. The translation keys, which we cannot find translations for, are:"
+                ]
+                    |> String.concat
+                    |> String.softWrap 80
+              , [ missingKeys
+                    |> String.join ", "
+                    |> indent
+                , "\n"
+                ]
+                    |> String.concat
+              ]
+                |> String.join "\n\n"
+            ]
+                |> String.join "\n\n"
+
+        JSONSyntaxError { fileName, locale, errorMsg } ->
+            [ title "json decode error" fileName
+            , [ "There was an error while reading the translations for the locale '"
+              , locale
+              , "' in the file '"
+              , fileName
+              , ". The JSON decoder says:"
+              ]
+                |> String.concat
+                |> String.softWrap 80
+            , "\n\n"
+            , errorMsg
+                |> String.softWrap 70
+                |> indent
+            , "\n"
+            ]
+                |> String.concat
+
+        NoTranslationsError { fileName, locale } ->
+            [ title "no translations error" fileName
+            , [ "There was an error while reading the translations for the locale '"
+              , locale
+              , "' in the file '"
+              , fileName
+              , ". The file does not contain any translations."
+              ]
+                |> String.concat
+                |> String.softWrap 80
+            ]
+                |> String.concat
 
 
 
@@ -145,47 +328,68 @@ directoryDecoder =
 
 
 collectTranslations :
-    List { locale : String, rawJson : String }
-    -> Result String (Dict Scope (Dict Key (Dict Locale String)))
+    List
+        { locale : String
+        , fileName : String
+        , rawJson : String
+        }
+    -> Result Error (Dict Scope (Dict Key (Dict Locale String)))
 collectTranslations rawData =
     rawData
-        |> List.map
-            (\{ locale, rawJson } ->
-                case Decode.decodeString directoryDecoder rawJson of
-                    Ok (Directory entries) ->
-                        Ok
-                            ( locale
-                            , translationsByScope entries
-                            )
-
-                    Ok _ ->
-                        Err <|
-                            "The locale '"
-                                ++ locale
-                                ++ "' does not contain any translations."
-
-                    Err error ->
-                        Err <|
-                            "There was an error while parsing the translations for '"
-                                ++ locale
-                                ++ "':"
-                                ++ error
-            )
         |> List.foldl
-            (\result listResult ->
+            (\{ locale, fileName, rawJson } listResult ->
                 case listResult of
                     Ok list ->
-                        case result of
-                            Ok data ->
-                                Ok (data :: list)
+                        case Decode.decodeString directoryDecoder rawJson of
+                            Ok (Directory entries) ->
+                                Ok
+                                    (( locale
+                                     , translationsByScope entries
+                                     )
+                                        :: list
+                                    )
+
+                            Ok _ ->
+                                Err
+                                    [ NoTranslationsError
+                                        { fileName = fileName
+                                        , locale = locale
+                                        }
+                                    ]
 
                             Err error ->
-                                Err error
+                                Err
+                                    [ JSONSyntaxError
+                                        { fileName = fileName
+                                        , locale = locale
+                                        , errorMsg = error
+                                        }
+                                    ]
 
-                    Err error ->
-                        listResult
+                    Err errors ->
+                        case Decode.decodeString directoryDecoder rawJson of
+                            Ok (Directory entries) ->
+                                listResult
+
+                            Ok _ ->
+                                Err <|
+                                    NoTranslationsError
+                                        { fileName = fileName
+                                        , locale = locale
+                                        }
+                                        :: errors
+
+                            Err error ->
+                                Err <|
+                                    JSONSyntaxError
+                                        { fileName = fileName
+                                        , locale = locale
+                                        , errorMsg = error
+                                        }
+                                        :: errors
             )
             (Ok [])
+        |> Result.mapError Errors
         |> Result.map collectTranslationsHelp
 
 
@@ -356,7 +560,9 @@ generateTranslationFunction locales key byLocale =
             |> Dict.values
             |> List.head
             |> Maybe.andThen
-                (Translation.toElmType cldrToArgType)
+                (Translation.toElmType cldrToArgType
+                    >> Result.toMaybe
+                )
             |> Maybe.withDefault "TODO: error"
       ]
         |> String.join " "
@@ -396,22 +602,62 @@ translationsFiles :
     List String
     -> Set Locale
     -> List ( Module, List ( Key, Dict Locale String ) )
-    -> List File
+    -> Result Error (List File)
 translationsFiles modules locales translations =
     locales
         |> Set.toList
-        |> List.map (translationsFilesForLocale modules translations)
-        |> List.concat
+        |> List.foldl
+            (\locale filesResult ->
+                case filesResult of
+                    Ok files ->
+                        case translationsFilesForLocale modules translations locale of
+                            Ok newFile ->
+                                Ok (newFile :: files)
+
+                            Err error ->
+                                Err [ error ]
+
+                    Err errors ->
+                        case translationsFilesForLocale modules translations locale of
+                            Ok _ ->
+                                filesResult
+
+                            Err error ->
+                                Err (error :: errors)
+            )
+            (Ok [])
+        |> Result.mapError Errors
+        |> Result.map List.concat
 
 
 translationsFilesForLocale :
     List String
     -> List ( Module, List ( Key, Dict Locale String ) )
     -> Locale
-    -> List File
+    -> Result Error (List File)
 translationsFilesForLocale modules translations locale =
     translations
-        |> List.map (uncurry (translationsFileForLocale modules locale))
+        |> List.foldl
+            (\( module_, translations ) filesResult ->
+                case filesResult of
+                    Ok files ->
+                        case translationsFileForLocale modules locale module_ translations of
+                            Ok newFile ->
+                                Ok (newFile :: files)
+
+                            Err error ->
+                                Err [ error ]
+
+                    Err errors ->
+                        case translationsFileForLocale modules locale module_ translations of
+                            Ok _ ->
+                                filesResult
+
+                            Err error ->
+                                Err (error :: errors)
+            )
+            (Ok [])
+        |> Result.mapError Errors
 
 
 translationsFileForLocale :
@@ -419,20 +665,9 @@ translationsFileForLocale :
     -> Locale
     -> Module
     -> List ( Key, Dict Locale String )
-    -> File
+    -> Result Error File
 translationsFileForLocale modules locale (Module scope name) translations =
     let
-        maybeTranslationsDict =
-            translations
-                |> List.foldl insertTranslation (Just Dict.empty)
-
-        insertTranslation ( key, byLocale ) =
-            Maybe.andThen
-                (\dict ->
-                    Dict.get locale byLocale
-                        |> Maybe.map (flip (Dict.insert key) dict)
-                )
-
         actualModules =
             (modules ++ scope ++ [ name ])
                 |> List.map String.toSentenceCase
@@ -440,37 +675,102 @@ translationsFileForLocale modules locale (Module scope name) translations =
         actualModule =
             String.toSentenceCase locale
     in
-    case maybeTranslationsDict of
-        Just translationsDict ->
-            { directory = actualModules
-            , name = actualModule
-            , content =
-                [ [ generateModuleDeclaration actualModules
-                        (String.toSentenceCase locale)
-                  , [ generateImport [] "Translation"
-                    , generateImportExposing [ "Node" ] [] "VirtualDom"
-                    , generateImport [ "Translation" ] actualModule
-                    ]
-                        |> joinLines
-                  ]
-                    |> joinLinesWith 1
-                , translationsDict
-                    |> Dict.toList
-                    |> List.filterMap (uncurry generateMessage)
-                    |> joinLinesWith 2
-                ]
-                    |> joinLinesWith 2
-            }
+    translations
+        |> fetchTranslationsForLocale locale
+        |> Result.andThen
+            (List.foldl
+                (\( name, icuMessage ) messagesResult ->
+                    case messagesResult of
+                        Ok messages ->
+                            case generateMessage name icuMessage of
+                                Ok newMessage ->
+                                    Ok (newMessage :: messages)
 
-        Nothing ->
-            Debug.crash "TODO"
+                                Err error ->
+                                    Err
+                                        [ IcuSyntaxError
+                                            { file = ""
+                                            , key = [ name ]
+                                            , error = error
+                                            }
+                                        ]
+
+                        Err errors ->
+                            case generateMessage name icuMessage of
+                                Ok newMessage ->
+                                    messagesResult
+
+                                Err error ->
+                                    Err <|
+                                        IcuSyntaxError
+                                            { file = ""
+                                            , key = [ name ]
+                                            , error = error
+                                            }
+                                            :: errors
+                )
+                (Ok [])
+                >> Result.map
+                    (\messages ->
+                        { directory = actualModules
+                        , name = actualModule
+                        , content =
+                            [ [ generateModuleDeclaration actualModules
+                                    (String.toSentenceCase locale)
+                              , [ generateImport [] "Translation"
+                                , generateImportExposing [ "Node" ] [] "VirtualDom"
+                                , generateImport [ "Translation" ] actualModule
+                                ]
+                                    |> joinLines
+                              ]
+                                |> joinLinesWith 1
+                            , joinLinesWith 2 messages
+                            ]
+                                |> joinLinesWith 2
+                        }
+                    )
+                >> Result.mapError Errors
+            )
 
 
-generateMessage : String -> String -> Maybe String
-generateMessage name icuMessage =
-    Translation.toElm cldrToArgType
-        (String.camelize name)
-        icuMessage
+fetchTranslationsForLocale :
+    Locale
+    -> List ( Key, Dict Locale String )
+    -> Result Error (List ( Key, String ))
+fetchTranslationsForLocale locale translations =
+    translations
+        |> List.foldl
+            (\( key, byLocale ) translationsResult ->
+                case translationsResult of
+                    Ok translations ->
+                        case Dict.get locale byLocale of
+                            Just translation ->
+                                Ok (( key, translation ) :: translations)
+
+                            Nothing ->
+                                Err [ key ]
+
+                    Err missingKeys ->
+                        case Dict.get locale byLocale of
+                            Just _ ->
+                                translationsResult
+
+                            Nothing ->
+                                Err (key :: missingKeys)
+            )
+            (Ok [])
+        |> Result.mapError
+            (\missingKeys ->
+                MissingTranslations
+                    { locale = locale
+                    , missingKeys = missingKeys
+                    }
+            )
+
+
+generateMessage : String -> String -> Result Parser.Error String
+generateMessage name =
+    Translation.toElm cldrToArgType (String.camelize name)
 
 
 moduleName : List String -> String
