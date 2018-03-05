@@ -326,7 +326,23 @@ writeFile { directory, name, content } =
             |> Encode.list
       )
     , ( "content"
-      , content
+      , [ content
+            |> String.split "\n"
+            |> List.map
+                (\line ->
+                    if
+                        line
+                            |> String.toList
+                            |> List.all (\char -> char == ' ')
+                    then
+                        ""
+                    else
+                        line
+                )
+            |> String.join "\n"
+        , "\n"
+        ]
+            |> String.concat
             |> Encode.string
       )
     ]
@@ -663,7 +679,6 @@ translationsRouterFile modules locales (Module scope name) translations =
         [ [ generateModuleDeclaration actualModules (String.toSentenceCase actualName)
           , [ [ generateImport modules "Locales"
               , generateImportExposing [ "Translation" ] [] "Translation"
-              , generateImportExposing [ "Node" ] [] "VirtualDom"
               ]
             , locales
                 |> Set.toList

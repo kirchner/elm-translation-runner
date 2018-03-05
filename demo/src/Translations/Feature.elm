@@ -2,7 +2,6 @@ module Translations.Feature exposing (..)
 
 import Locales exposing (..)
 import Translation exposing (Translation)
-import VirtualDom exposing (Node)
 import Translations.Feature.De as De exposing (..)
 import Translations.Feature.En as En exposing (..)
 
@@ -12,7 +11,7 @@ emailInfo locale =
     case locale of
         De ->
             De.emailInfo
-        
+
         En ->
             En.emailInfo
 
@@ -22,7 +21,7 @@ greeting locale =
     case locale of
         De ->
             De.greeting
-        
+
         En ->
             En.greeting
 
@@ -32,6 +31,6 @@ missingInDe locale =
     case locale of
         De ->
             De.missingInDe
-        
+
         En ->
             En.missingInDe
