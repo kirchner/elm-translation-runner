@@ -5,7 +5,7 @@ import VirtualDom exposing (Node)
 import Translation.En exposing (..)
 
 
-emailInfo : Translation { args | count : Float } msg
+emailInfo : Translation { args | count : Float } node
 emailInfo =
     final "emailInfo" <|
         concat
@@ -26,7 +26,7 @@ emailInfo =
             ]
 
 
-greeting : Translation { args | name : String } msg
+greeting : Translation { args | name : String } node
 greeting =
     final "greeting" <|
         concat

@@ -7,7 +7,7 @@ import Translations.Feature.De as De exposing (..)
 import Translations.Feature.En as En exposing (..)
 
 
-emailInfo : Locale -> Translation { args | count : Float } msg
+emailInfo : Locale -> Translation { args | count : Float } node
 emailInfo locale =
     case locale of
         De ->
@@ -17,7 +17,7 @@ emailInfo locale =
             En.emailInfo
 
 
-greeting : Locale -> Translation { args | name : String } msg
+greeting : Locale -> Translation { args | name : String } node
 greeting locale =
     case locale of
         De ->
