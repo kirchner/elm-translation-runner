@@ -1,9 +1,9 @@
 module Main exposing (main)
 
 import Html
-import Translation exposing (asStringWith)
+import Locales exposing (..)
+import Translation exposing (asString, asStringWith)
 import Translations.Feature exposing (..)
-import Translations.Locales exposing (..)
 
 
 main =
@@ -17,6 +17,11 @@ main =
         , Html.div []
             [ emailInfo De
                 |> asStringWith { count = 1 }
+                |> Html.text
+            ]
+        , Html.div []
+            [ missingInDe De
+                |> asString
                 |> Html.text
             ]
         ]
