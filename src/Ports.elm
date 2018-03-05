@@ -1,6 +1,7 @@
 port module Ports
     exposing
-        ( generatedElm
+        ( fetchFile
+        , fileReceived
         , reportError
         , writeModule
         )
@@ -8,10 +9,13 @@ port module Ports
 import Json.Decode exposing (Value)
 
 
-port generatedElm : String -> Cmd msg
+port fetchFile : String -> Cmd msg
 
 
-port writeModule : Value -> Cmd msg
+port fileReceived : (Value -> msg) -> Sub msg
 
 
 port reportError : Value -> Cmd msg
+
+
+port writeModule : Value -> Cmd msg

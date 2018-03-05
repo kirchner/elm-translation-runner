@@ -67,25 +67,19 @@ var generateElm = function() {
     //  .on("close", function(exitCode) {
         var Elm = require("./main.js");
 
-        var locales = [];
+        var worker = Elm.Main.worker(config);
 
-        config["translation-files"].forEach(function({ path, locale }) {
-          var rawJson =
+        worker.ports.fetchFile.subscribe(function(path) {
+          var content =
             fs
               .readFileSync(path)
               .toString();
 
-          locales.push({
-            "locale": locale,
-            "fileName": path,
-            "rawJson": rawJson
+          worker.ports.fileReceived.send({
+            "path": path,
+            "content": content
           });
         });
-
-        var worker = Elm.Main.worker({
-          "locales": locales,
-          "modulePrefix": config["module-prefix"]
-        })
 
         worker.ports.writeModule.subscribe(function(data) {
           var scope = data["scope"];

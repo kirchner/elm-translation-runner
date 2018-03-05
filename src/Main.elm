@@ -3,7 +3,8 @@ module Main exposing (main)
 import Char
 import Dict exposing (Dict)
 import Error
-import Json.Decode as Decode exposing (Decoder)
+import Json.Decode as Decode exposing (Decoder, Value)
+import Json.Decode.Pipeline as Decode
 import Json.Encode as Encode
 import Parser
 import Platform exposing (programWithFlags)
@@ -13,72 +14,242 @@ import String.Extra as String
 import Translation exposing (ArgType(..))
 
 
-type alias Flags =
-    { modulePrefix : String
-    , locales :
-        List
-            { locale : String
-            , fileName : String
-            , rawJson : String
-            }
-    }
-
-
-main : Program Flags {} msg
+main : Program Value Model Msg
 main =
     programWithFlags
         { init = init
-        , update = \_ model -> ( model, Cmd.none )
-        , subscriptions = \_ -> Sub.none
+        , update = update
+        , subscriptions = subscriptions
         }
 
 
-init : Flags -> ( {}, Cmd msg )
-init { modulePrefix, locales } =
-    ( {}
-    , collectTranslations locales
-        |> Result.andThen
-            (\byScope ->
-                let
-                    allLocales =
-                        collectLocales byScope
-                in
-                parseModulePrefix modulePrefix
-                    |> Result.andThen
-                        (\{ modules, root } ->
-                            let
-                                translationsList =
-                                    collectTranslationsList modules root byScope
-                            in
-                            translationsList
-                                |> translationsFiles modules allLocales
-                                |> Result.map
-                                    (\files ->
-                                        [ translationsList
-                                            |> translationsRouterFiles modules allLocales
-                                            |> List.map writeFile
-                                            |> Cmd.batch
-                                        , files
-                                            |> List.map writeFile
-                                            |> Cmd.batch
-                                        , allLocales
-                                            |> localesFile modules
-                                            |> writeFile
-                                        ]
-                                            |> Cmd.batch
+
+---- CONFIG
+
+
+type alias Config =
+    { sourceDirectory : String
+    , modulePrefix : List String
+    , locales : List LocaleConfig
+    }
+
+
+type alias LocaleConfig =
+    { name : String
+    , code : String
+    , files : List FileConfig
+    , fallbacks : List String
+    }
+
+
+type alias FileConfig =
+    { path : String
+    , modulePrefix : List String
+    }
+
+
+requiredFilesPaths : Config -> List String
+requiredFilesPaths config =
+    config.locales
+        |> List.foldl
+            (\locale files ->
+                locale.files
+                    |> List.map .path
+                    |> List.append files
+            )
+            []
+
+
+configDecoder : Decoder Config
+configDecoder =
+    Decode.succeed Config
+        |> Decode.required "source-directory" Decode.string
+        |> Decode.required "module-prefix" modulePrefixDecoder
+        |> Decode.required "locales" (Decode.list localeConfigDecoder)
+
+
+localeConfigDecoder : Decoder LocaleConfig
+localeConfigDecoder =
+    Decode.succeed LocaleConfig
+        |> Decode.required "name" Decode.string
+        |> Decode.required "code" Decode.string
+        |> Decode.required "files" (Decode.list fileConfigDecoder)
+        |> Decode.required "fallbacks" (Decode.list Decode.string)
+
+
+fileConfigDecoder : Decoder FileConfig
+fileConfigDecoder =
+    Decode.succeed FileConfig
+        |> Decode.required "path" Decode.string
+        |> Decode.required "module-prefix" modulePrefixDecoder
+
+
+modulePrefixDecoder : Decoder (List String)
+modulePrefixDecoder =
+    Decode.string
+        |> Decode.map (String.split ".")
+
+
+
+---- MODEL
+
+
+type alias Model =
+    { config : Config
+    , files : Dict String String
+    }
+
+
+
+---- INIT
+
+
+init : Value -> ( Model, Cmd Msg )
+init value =
+    case Decode.decodeValue configDecoder value of
+        Ok config ->
+            ( { config = config
+              , files = Dict.empty
+              }
+            , config.locales
+                |> List.map (.files >> List.map (.path >> Ports.fetchFile))
+                |> List.concat
+                |> Cmd.batch
+            )
+
+        Err errorMsg ->
+            Debug.crash errorMsg
+
+
+
+---- SUBSCRIPTIONS
+
+
+subscriptions : Model -> Sub Msg
+subscriptions _ =
+    Ports.fileReceived FileReceived
+
+
+type alias ReceivedFile =
+    { path : String
+    , content : String
+    }
+
+
+fileDecoder : Decoder ReceivedFile
+fileDecoder =
+    Decode.succeed ReceivedFile
+        |> Decode.required "path" Decode.string
+        |> Decode.required "content" Decode.string
+
+
+
+---- UPDATE
+
+
+type Msg
+    = FileReceived Value
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        FileReceived value ->
+            case Decode.decodeValue fileDecoder value of
+                Ok file ->
+                    { model
+                        | files =
+                            model.files
+                                |> Dict.insert file.path file.content
+                    }
+                        |> processFiles
+
+                Err errorMsg ->
+                    Debug.crash errorMsg
+
+
+processFiles : Model -> ( Model, Cmd Msg )
+processFiles model =
+    let
+        requiredFiles =
+            model.config
+                |> requiredFilesPaths
+                |> List.sort
+
+        receivedFiles =
+            model.files
+                |> Dict.keys
+                |> List.sort
+    in
+    if requiredFiles /= receivedFiles then
+        ( model, Cmd.none )
+    else
+        let
+            locales =
+                model.config.locales
+                    |> List.map
+                        (\locale ->
+                            locale.files
+                                |> List.map
+                                    (\file ->
+                                        { locale = locale.code
+                                        , fileName = file.path
+                                        , rawJson =
+                                            Dict.get file.path model.files
+                                                |> Maybe.withDefault "{}"
+                                        }
                                     )
                         )
-            )
-        |> (\result ->
-                case result of
-                    Ok cmd ->
-                        cmd
+                    |> List.concat
 
-                    Err error ->
-                        error
-                            |> reportError
-           )
-    )
+            modulePrefix =
+                model.config.modulePrefix
+                    |> String.join "."
+        in
+        ( model
+        , collectTranslations locales
+            |> Result.andThen
+                (\byScope ->
+                    let
+                        allLocales =
+                            collectLocales byScope
+                    in
+                    parseModulePrefix modulePrefix
+                        |> Result.andThen
+                            (\{ modules, root } ->
+                                let
+                                    translationsList =
+                                        collectTranslationsList modules root byScope
+                                in
+                                translationsList
+                                    |> translationsFiles modules allLocales
+                                    |> Result.map
+                                        (\files ->
+                                            [ translationsList
+                                                |> translationsRouterFiles modules allLocales
+                                                |> List.map writeFile
+                                                |> Cmd.batch
+                                            , files
+                                                |> List.map writeFile
+                                                |> Cmd.batch
+                                            , allLocales
+                                                |> localesFile modules
+                                                |> writeFile
+                                            ]
+                                                |> Cmd.batch
+                                        )
+                            )
+                )
+            |> (\result ->
+                    case result of
+                        Ok cmd ->
+                            cmd
+
+                        Err error ->
+                            error
+                                |> reportError
+               )
+        )
 
 
 parseModulePrefix : String -> Result Error { modules : List String, root : String }

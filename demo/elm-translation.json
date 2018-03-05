@@ -1,14 +1,28 @@
 {
     "source-directory": "./src",
     "module-prefix": "Translations",
-    "translation-files": [
+    "locales": [
         {
-            "path": "./translations/de.json",
-            "locale": "de"
+            "name": "en",
+            "code": "en",
+            "files": [
+                {
+                    "path": "./translations/en.json",
+                    "module-prefix": ""
+                }
+            ],
+            "fallbacks": []
         },
         {
-            "path": "./translations/en.json",
-            "locale": "en"
+            "name": "de",
+            "code": "de",
+            "files": [
+                {
+                    "path": "./translations/de.json",
+                    "module-prefix": ""
+                }
+            ],
+            "fallbacks": [ "en" ]
         }
     ]
 }
