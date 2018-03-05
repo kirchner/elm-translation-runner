@@ -25,3 +25,13 @@ greeting locale =
         
         En ->
             En.greeting
+
+
+missingInDe : Locale -> Translation args node
+missingInDe locale =
+    case locale of
+        De ->
+            De.missingInDe
+        
+        En ->
+            En.missingInDe

@@ -213,6 +213,16 @@ processFiles model =
             collect byScope =
                 { allLocales =
                     collectLocales byScope
+                        |> List.map
+                            (\localeName ->
+                                ( localeName
+                                , model.config.locales
+                                    |> List.filter (\locale -> locale.name == localeName)
+                                    |> List.head
+                                    |> Maybe.map (\locale -> locale.fallbacks)
+                                    |> Maybe.withDefault []
+                                )
+                            )
                 , translationsList =
                     collectTranslationsList
                         model.config.modulePrefix
@@ -228,13 +238,19 @@ processFiles model =
                     >> Result.map
                         (\( files, { allLocales, translationsList } ) ->
                             [ translationsList
-                                |> translationsRouterFiles model.config.modulePrefix allLocales
+                                |> translationsRouterFiles model.config.modulePrefix
+                                    (allLocales
+                                        |> List.map Tuple.first
+                                        |> Set.fromList
+                                    )
                                 |> List.map writeFile
                                 |> Cmd.batch
                             , files
                                 |> List.map writeFile
                                 |> Cmd.batch
                             , allLocales
+                                |> List.map Tuple.first
+                                |> Set.fromList
                                 |> localesFile model.config.modulePrefix
                                 |> writeFile
                             ]
@@ -561,7 +577,7 @@ translationsByScopeHelp scope name directory =
 ---- COLLECT LOCALES
 
 
-collectLocales : Dict Scope (Dict Key (Dict Locale String)) -> Set String
+collectLocales : Dict Scope (Dict Key (Dict Locale String)) -> List String
 collectLocales translations =
     translations
         |> Dict.values
@@ -578,6 +594,7 @@ collectLocales translations =
                         locales
             )
             Set.empty
+        |> Set.toList
 
 
 
@@ -714,20 +731,19 @@ generateTranslationFunction locales key byLocale =
 translationsFiles :
     List String
     ->
-        { allLocales : Set Locale
+        { allLocales : List ( Locale, List Locale )
         , translationsList : List ( Module, List ( Key, Dict Locale String ) )
         }
     ->
         Result Error
             ( List File
-            , { allLocales : Set Locale
+            , { allLocales : List ( Locale, List Locale )
               , translationsList : List ( Module, List ( Key, Dict Locale String ) )
               }
             )
 translationsFiles modules ({ allLocales, translationsList } as data) =
     allLocales
-        |> Set.toList
-        |> doCollectingErrors (translationsFilesForLocale modules translationsList)
+        |> doCollectingErrors (uncurry (translationsFilesForLocale modules translationsList))
         |> Result.map (\list -> ( List.concat list, data ))
 
 
@@ -735,19 +751,21 @@ translationsFilesForLocale :
     List String
     -> List ( Module, List ( Key, Dict Locale String ) )
     -> Locale
+    -> List Locale
     -> Result Error (List File)
-translationsFilesForLocale modules translations locale =
+translationsFilesForLocale modules translations locale fallbacks =
     translations
-        |> doCollectingErrors (uncurry (translationsFileForLocale modules locale))
+        |> doCollectingErrors (uncurry (translationsFileForLocale modules locale fallbacks))
 
 
 translationsFileForLocale :
     List String
     -> Locale
+    -> List Locale
     -> Module
     -> List ( Key, Dict Locale String )
     -> Result Error File
-translationsFileForLocale modules locale (Module scope name) translations =
+translationsFileForLocale modules locale fallbacks (Module scope name) translations =
     let
         actualModules =
             (modules ++ scope ++ [ name ])
@@ -757,11 +775,11 @@ translationsFileForLocale modules locale (Module scope name) translations =
             String.toSentenceCase locale
     in
     translations
-        |> fetchTranslationsForLocale locale
+        |> fetchTranslationsForLocale locale fallbacks
         |> Result.andThen
             (doCollectingErrors
-                (\( name, icuMessage ) ->
-                    generateMessage name icuMessage
+                (\( name, fetchedTranslation ) ->
+                    generateMessage name fetchedTranslation
                         |> Result.mapError
                             (\error ->
                                 IcuSyntaxError
@@ -793,17 +811,43 @@ translationsFileForLocale modules locale (Module scope name) translations =
             )
 
 
+type FetchedTranslation
+    = Final String
+    | Fallback String
+
+
 fetchTranslationsForLocale :
     Locale
+    -> List Locale
     -> List ( Key, Dict Locale String )
-    -> Result Error (List ( Key, String ))
-fetchTranslationsForLocale locale translations =
+    -> Result Error (List ( Key, FetchedTranslation ))
+fetchTranslationsForLocale locale fallbacks translations =
+    let
+        getTranslation byLocale =
+            case Dict.get locale byLocale of
+                Just translation ->
+                    Just (Final translation)
+
+                Nothing ->
+                    fallbacks
+                        |> List.foldl
+                            (\fallbackLocale maybeTranslation ->
+                                case maybeTranslation of
+                                    Just _ ->
+                                        maybeTranslation
+
+                                    Nothing ->
+                                        Dict.get fallbackLocale byLocale
+                                            |> Maybe.map Fallback
+                            )
+                            Nothing
+    in
     translations
         |> List.foldl
             (\( key, byLocale ) translationsResult ->
                 case translationsResult of
                     Ok translations ->
-                        case Dict.get locale byLocale of
+                        case getTranslation byLocale of
                             Just translation ->
                                 Ok (( key, translation ) :: translations)
 
@@ -811,7 +855,7 @@ fetchTranslationsForLocale locale translations =
                                 Err [ key ]
 
                     Err missingKeys ->
-                        case Dict.get locale byLocale of
+                        case getTranslation byLocale of
                             Just _ ->
                                 translationsResult
 
@@ -828,9 +872,14 @@ fetchTranslationsForLocale locale translations =
             )
 
 
-generateMessage : String -> String -> Result Parser.Error String
-generateMessage name =
-    Translation.toElm cldrToArgType (String.camelize name)
+generateMessage : String -> FetchedTranslation -> Result Parser.Error String
+generateMessage name fetchedTranslation =
+    case fetchedTranslation of
+        Final translation ->
+            Translation.toElm cldrToArgType (String.camelize name) translation
+
+        Fallback translation ->
+            Translation.toFallbackElm cldrToArgType (String.camelize name) translation
 
 
 moduleName : List String -> String

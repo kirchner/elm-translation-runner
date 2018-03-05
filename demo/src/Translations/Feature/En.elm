@@ -34,3 +34,9 @@ greeting =
             , string .name "name"
             , s "!"
             ]
+
+
+missingInDe : Translation args node
+missingInDe =
+    final "missingInDe" <|
+        s "I am not translated to German."

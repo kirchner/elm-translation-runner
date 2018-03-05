@@ -1,6 +1,7 @@
 {
   "feature": {
     "greeting": "Good morning, {name}!",
-    "emailInfo": "You have {count, plural, one{# new email} other{# new emails}}."
+    "emailInfo": "You have {count, plural, one{# new email} other{# new emails}}.",
+    "missingInDe": "I am not translated to German."
   }
 }
