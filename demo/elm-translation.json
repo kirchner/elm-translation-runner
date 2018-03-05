@@ -1,6 +1,7 @@
 {
     "source-directory": "./src",
-    "module-prefix": "Translations",
+    "module-prefix": "",
+    "module-name": "Translations",
     "locales": [
         {
             "name": "en",

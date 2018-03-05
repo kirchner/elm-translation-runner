@@ -30,6 +30,7 @@ main =
 type alias Config =
     { sourceDirectory : String
     , modulePrefix : List String
+    , moduleName : String
     , locales : List LocaleConfig
     }
 
@@ -65,6 +66,7 @@ configDecoder =
     Decode.succeed Config
         |> Decode.required "source-directory" Decode.string
         |> Decode.required "module-prefix" modulePrefixDecoder
+        |> Decode.required "module-name" Decode.string
         |> Decode.required "locales" (Decode.list localeConfigDecoder)
 
 
@@ -87,7 +89,13 @@ fileConfigDecoder =
 modulePrefixDecoder : Decoder (List String)
 modulePrefixDecoder =
     Decode.string
-        |> Decode.map (String.split ".")
+        |> Decode.map
+            (\string ->
+                if string == "" then
+                    []
+                else
+                    String.split "." string
+            )
 
 
 
@@ -202,43 +210,36 @@ processFiles model =
                         )
                     |> List.concat
 
-            modulePrefix =
-                model.config.modulePrefix
-                    |> String.join "."
+            collect byScope =
+                { allLocales =
+                    collectLocales byScope
+                , translationsList =
+                    collectTranslationsList
+                        model.config.modulePrefix
+                        model.config.moduleName
+                        byScope
+                }
         in
         ( model
         , collectTranslations locales
             |> Result.andThen
-                (\byScope ->
-                    let
-                        allLocales =
-                            collectLocales byScope
-                    in
-                    parseModulePrefix modulePrefix
-                        |> Result.andThen
-                            (\{ modules, root } ->
-                                let
-                                    translationsList =
-                                        collectTranslationsList modules root byScope
-                                in
-                                translationsList
-                                    |> translationsFiles modules allLocales
-                                    |> Result.map
-                                        (\files ->
-                                            [ translationsList
-                                                |> translationsRouterFiles modules allLocales
-                                                |> List.map writeFile
-                                                |> Cmd.batch
-                                            , files
-                                                |> List.map writeFile
-                                                |> Cmd.batch
-                                            , allLocales
-                                                |> localesFile modules
-                                                |> writeFile
-                                            ]
-                                                |> Cmd.batch
-                                        )
-                            )
+                (collect
+                    >> translationsFiles model.config.modulePrefix
+                    >> Result.map
+                        (\( files, { allLocales, translationsList } ) ->
+                            [ translationsList
+                                |> translationsRouterFiles model.config.modulePrefix allLocales
+                                |> List.map writeFile
+                                |> Cmd.batch
+                            , files
+                                |> List.map writeFile
+                                |> Cmd.batch
+                            , allLocales
+                                |> localesFile model.config.modulePrefix
+                                |> writeFile
+                            ]
+                                |> Cmd.batch
+                        )
                 )
             |> (\result ->
                     case result of
@@ -250,23 +251,6 @@ processFiles model =
                                 |> reportError
                )
         )
-
-
-parseModulePrefix : String -> Result Error { modules : List String, root : String }
-parseModulePrefix modulePrefix =
-    case
-        modulePrefix
-            |> String.split "."
-            |> List.reverse
-    of
-        root :: modules ->
-            Ok
-                { modules = List.reverse modules
-                , root = root
-                }
-
-        [] ->
-            Err (InvalidModulePrefix modulePrefix)
 
 
 collectTranslationsList :
@@ -340,7 +324,6 @@ writeFile { directory, name, content } =
 
 type Error
     = Errors (List Error)
-    | InvalidModulePrefix String
     | MissingTranslations
         { locale : String
         , missingKeys : List String
@@ -392,17 +375,6 @@ printError error =
         Errors errors ->
             errors
                 |> List.map printError
-                |> String.join "\n\n"
-
-        InvalidModulePrefix modulePrefix ->
-            [ title "invalid module prefix" ""
-            , [ "The module prefix '"
-              , modulePrefix
-              , "' is invalid. 'Data.Translations' is an example for a valid module prefix."
-              ]
-                |> String.concat
-                |> String.softWrap 80
-            ]
                 |> String.join "\n\n"
 
         IcuSyntaxError { file, key, error } ->
@@ -741,14 +713,22 @@ generateTranslationFunction locales key byLocale =
 
 translationsFiles :
     List String
-    -> Set Locale
-    -> List ( Module, List ( Key, Dict Locale String ) )
-    -> Result Error (List File)
-translationsFiles modules locales translations =
-    locales
+    ->
+        { allLocales : Set Locale
+        , translationsList : List ( Module, List ( Key, Dict Locale String ) )
+        }
+    ->
+        Result Error
+            ( List File
+            , { allLocales : Set Locale
+              , translationsList : List ( Module, List ( Key, Dict Locale String ) )
+              }
+            )
+translationsFiles modules ({ allLocales, translationsList } as data) =
+    allLocales
         |> Set.toList
-        |> doCollectingErrors (translationsFilesForLocale modules translations)
-        |> Result.map List.concat
+        |> doCollectingErrors (translationsFilesForLocale modules translationsList)
+        |> Result.map (\list -> ( List.concat list, data ))
 
 
 translationsFilesForLocale :
