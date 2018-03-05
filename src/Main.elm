@@ -507,60 +507,30 @@ collectTranslations :
     -> Result Error (Dict Scope (Dict Key (Dict Locale String)))
 collectTranslations rawData =
     rawData
-        |> List.foldl
-            (\{ locale, fileName, rawJson } listResult ->
-                case listResult of
-                    Ok list ->
-                        case Decode.decodeString directoryDecoder rawJson of
-                            Ok (Directory entries) ->
-                                Ok
-                                    (( locale
-                                     , translationsByScope entries
-                                     )
-                                        :: list
-                                    )
+        |> doCollectingErrors
+            (\{ locale, fileName, rawJson } ->
+                case Decode.decodeString directoryDecoder rawJson of
+                    Ok (Directory entries) ->
+                        Ok
+                            ( locale
+                            , translationsByScope entries
+                            )
 
-                            Ok _ ->
-                                Err
-                                    [ NoTranslationsError
-                                        { fileName = fileName
-                                        , locale = locale
-                                        }
-                                    ]
+                    Ok _ ->
+                        Err <|
+                            NoTranslationsError
+                                { fileName = fileName
+                                , locale = locale
+                                }
 
-                            Err error ->
-                                Err
-                                    [ JSONSyntaxError
-                                        { fileName = fileName
-                                        , locale = locale
-                                        , errorMsg = error
-                                        }
-                                    ]
-
-                    Err errors ->
-                        case Decode.decodeString directoryDecoder rawJson of
-                            Ok (Directory entries) ->
-                                listResult
-
-                            Ok _ ->
-                                Err <|
-                                    NoTranslationsError
-                                        { fileName = fileName
-                                        , locale = locale
-                                        }
-                                        :: errors
-
-                            Err error ->
-                                Err <|
-                                    JSONSyntaxError
-                                        { fileName = fileName
-                                        , locale = locale
-                                        , errorMsg = error
-                                        }
-                                        :: errors
+                    Err error ->
+                        Err <|
+                            JSONSyntaxError
+                                { fileName = fileName
+                                , locale = locale
+                                , errorMsg = error
+                                }
             )
-            (Ok [])
-        |> Result.mapError Errors
         |> Result.map collectTranslationsHelp
 
 
@@ -777,27 +747,7 @@ translationsFiles :
 translationsFiles modules locales translations =
     locales
         |> Set.toList
-        |> List.foldl
-            (\locale filesResult ->
-                case filesResult of
-                    Ok files ->
-                        case translationsFilesForLocale modules translations locale of
-                            Ok newFile ->
-                                Ok (newFile :: files)
-
-                            Err error ->
-                                Err [ error ]
-
-                    Err errors ->
-                        case translationsFilesForLocale modules translations locale of
-                            Ok _ ->
-                                filesResult
-
-                            Err error ->
-                                Err (error :: errors)
-            )
-            (Ok [])
-        |> Result.mapError Errors
+        |> doCollectingErrors (translationsFilesForLocale modules translations)
         |> Result.map List.concat
 
 
@@ -808,27 +758,7 @@ translationsFilesForLocale :
     -> Result Error (List File)
 translationsFilesForLocale modules translations locale =
     translations
-        |> List.foldl
-            (\( module_, translations ) filesResult ->
-                case filesResult of
-                    Ok files ->
-                        case translationsFileForLocale modules locale module_ translations of
-                            Ok newFile ->
-                                Ok (newFile :: files)
-
-                            Err error ->
-                                Err [ error ]
-
-                    Err errors ->
-                        case translationsFileForLocale modules locale module_ translations of
-                            Ok _ ->
-                                filesResult
-
-                            Err error ->
-                                Err (error :: errors)
-            )
-            (Ok [])
-        |> Result.mapError Errors
+        |> doCollectingErrors (uncurry (translationsFileForLocale modules locale))
 
 
 translationsFileForLocale :
@@ -849,38 +779,18 @@ translationsFileForLocale modules locale (Module scope name) translations =
     translations
         |> fetchTranslationsForLocale locale
         |> Result.andThen
-            (List.foldl
-                (\( name, icuMessage ) messagesResult ->
-                    case messagesResult of
-                        Ok messages ->
-                            case generateMessage name icuMessage of
-                                Ok newMessage ->
-                                    Ok (newMessage :: messages)
-
-                                Err error ->
-                                    Err
-                                        [ IcuSyntaxError
-                                            { file = ""
-                                            , key = [ name ]
-                                            , error = error
-                                            }
-                                        ]
-
-                        Err errors ->
-                            case generateMessage name icuMessage of
-                                Ok newMessage ->
-                                    messagesResult
-
-                                Err error ->
-                                    Err <|
-                                        IcuSyntaxError
-                                            { file = ""
-                                            , key = [ name ]
-                                            , error = error
-                                            }
-                                            :: errors
+            (doCollectingErrors
+                (\( name, icuMessage ) ->
+                    generateMessage name icuMessage
+                        |> Result.mapError
+                            (\error ->
+                                IcuSyntaxError
+                                    { file = ""
+                                    , key = [ name ]
+                                    , error = error
+                                    }
+                            )
                 )
-                (Ok [])
                 >> Result.map
                     (\messages ->
                         { directory = actualModules
@@ -900,7 +810,6 @@ translationsFileForLocale modules locale (Module scope name) translations =
                                 |> joinLinesWith 2
                         }
                     )
-                >> Result.mapError Errors
             )
 
 
@@ -1103,3 +1012,33 @@ generateQualifiedImport modules name =
     , "exposing (..)"
     ]
         |> String.join " "
+
+
+
+---- ERROR HELPER
+
+
+doCollectingErrors : (a -> Result Error b) -> List a -> Result Error (List b)
+doCollectingErrors func listA =
+    listA
+        |> List.foldl
+            (\a resultListB ->
+                case resultListB of
+                    Ok listB ->
+                        case func a of
+                            Ok b ->
+                                Ok (b :: listB)
+
+                            Err error ->
+                                Err [ error ]
+
+                    Err errors ->
+                        case func a of
+                            Ok b ->
+                                resultListB
+
+                            Err error ->
+                                Err (error :: errors)
+            )
+            (Ok [])
+        |> Result.mapError Errors
