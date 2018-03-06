@@ -1,312 +1,154 @@
-module Error exposing (print)
+module Error
+    exposing
+        ( Error(..)
+        , mapWithErrors
+        , print
+        )
 
-{-| Pretty print the `Error`'s produced by `Icu.parse : String -> Result
-Error Message`.
+import Char
+import Error.Icu
+import Parser
+import String.Extra as String
 
-@docs print
 
--}
-
-import Html exposing (Html)
-import Html.Attributes as Attributes
-import List.Extra as List
-import Parser exposing (..)
+type Error
+    = Errors (List Error)
+    | MissingTranslations
+        { locale : String
+        , missingKeys : List String
+        }
+    | IcuSyntaxError
+        { file : String
+        , key : List String
+        , error : Parser.Error
+        }
+    | JSONSyntaxError
+        { fileName : String
+        , locale : String
+        , errorMsg : String
+        }
+    | NoTranslationsError
+        { fileName : String
+        , locale : String
+        }
 
 
 print : Error -> String
-print ({ row, col, source, problem, context } as error) =
+print error =
     let
-        message =
-            [ "I ran into a problem while parsing "
-            , context
-                |> List.head
-                |> Maybe.map .description
-                |> Maybe.map blueText
-                |> Maybe.withDefault ""
-            , context
-                |> List.drop 1
-                |> List.head
-                |> Maybe.map .description
-                |> Maybe.map (\desc -> " of " ++ desc)
-                |> Maybe.withDefault ""
-            , "."
+        title name location =
+            [ "\x1B[36m--"
+            , name
+                |> String.map Char.toUpper
+            , "-"
+                |> List.repeat (80 - 4 - String.length name - String.length location)
+                |> String.concat
+            , location
+            , "\x1B[0m"
             ]
-
-        contextRow =
-            context
-                |> List.head
-                |> Maybe.map .row
-                |> Maybe.withDefault row
-
-        contextCol =
-            context
-                |> List.head
-                |> Maybe.map .col
-                |> Maybe.withDefault col
-
-        printLine y =
-            if y > 0 then
-                source
-                    |> String.split "\n"
-                    |> List.drop (y - 1)
-                    |> List.head
-                    |> Maybe.map
-                        (\line ->
-                            [ toString y ++ "| "
-                            , -- TODO: proper multiline coloring
-                              line
-                            , "\n"
-                            ]
-                        )
-                    |> Maybe.withDefault []
-            else
-                []
-
-        code =
-            [ printLine (row - 2)
-            , printLine (row - 1)
-            , printLine row
-            , [ redText arrow ]
-            ]
-                |> List.concat
-
-        arrow =
-            String.repeat (col + 3) " " ++ "^"
+                |> String.join " "
     in
-    [ message
-    , [ "\n\n" ]
-    , code
-    , [ "\n" ]
-    , printProblem problem
-    , [ "\n" ]
-    ]
-        |> List.concat
-        |> String.concat
+    case error of
+        Errors errors ->
+            errors
+                |> List.map print
+                |> String.join "\n\n"
 
-
-flattenProblem :
-    Parser.Problem
-    ->
-        { keywords : List String
-        , symbols : List String
-        , others : List Parser.Problem
-        }
-flattenProblem problem =
-    flattenProblemHelper problem
-        { keywords = []
-        , symbols = []
-        , others = []
-        }
-        |> (\collected ->
-                { collected
-                    | keywords = List.unique collected.keywords
-                    , symbols = List.unique collected.symbols
-                }
-           )
-
-
-flattenProblemHelper :
-    Parser.Problem
-    ->
-        { keywords : List String
-        , symbols : List String
-        , others : List Parser.Problem
-        }
-    ->
-        { keywords : List String
-        , symbols : List String
-        , others : List Parser.Problem
-        }
-flattenProblemHelper problem collected =
-    case problem of
-        ExpectingKeyword keyword ->
-            { collected | keywords = keyword :: collected.keywords }
-
-        ExpectingSymbol symbol ->
-            { collected | symbols = symbol :: collected.symbols }
-
-        BadOneOf problems ->
-            problems
-                |> List.foldl flattenProblemHelper collected
-
-        _ ->
-            { collected | others = problem :: collected.others }
-
-
-printKeywords : List String -> Maybe (List String)
-printKeywords keywords =
-    case keywords of
-        [] ->
-            Nothing
-
-        _ ->
-            [ [ "one of the following keywords:\n\n" ]
-            , keywords
-                |> List.map
-                    (\keyword ->
-                        [ "    "
-                        , greenText keyword
-                        ]
-                    )
-                |> List.intersperse [ ",\n" ]
-                |> List.concat
+        IcuSyntaxError { file, key, error } ->
+            [ title "syntax error" file
+            , error
+                |> Error.Icu.print
             ]
-                |> List.concat
-                |> Just
+                |> String.join "\n\n"
 
-
-printSymbols : List String -> Maybe (List String)
-printSymbols symbols =
-    case symbols of
-        [] ->
-            Nothing
-
-        _ ->
-            [ [ "one of the following symbols:\n\n    " ]
-            , symbols
-                |> List.map
-                    (\symbol ->
-                        [ "'"
-                        , greenText symbol
-                        , "'"
-                        ]
-                    )
-                |> List.intersperse [ ",  " ]
-                |> List.concat
+        MissingTranslations { locale, missingKeys } ->
+            [ title "missing translations" ""
+            , [ [ "The locale '"
+                , locale
+                , "' is missing translations, which are given in another locale. The translation keys, which we cannot find translations for, are:"
+                ]
+                    |> String.concat
+                    |> String.softWrap 80
+              , [ missingKeys
+                    |> String.join ", "
+                    |> indent
+                , "\n"
+                ]
+                    |> String.concat
+              ]
+                |> String.join "\n\n"
             ]
-                |> List.concat
-                |> Just
+                |> String.join "\n\n"
 
-
-printProblem : Parser.Problem -> List String
-printProblem problem =
-    let
-        { keywords, symbols, others } =
-            flattenProblem problem
-    in
-    [ [ "I expected " ]
-    , [ printKeywords keywords
-      , printSymbols symbols
-      , case others of
-            [] ->
-                Nothing
-
-            _ ->
-                others
-                    |> List.map printSingleProblem
-                    |> List.concat
-                    |> List.intersperse " or "
-                    |> Just
-      ]
-        |> List.filterMap identity
-        |> List.intersperse [ ",\n\nor " ]
-        |> List.concat
-    , [ "." ]
-    ]
-        |> List.concat
-
-
-printSingleProblem : Parser.Problem -> List String
-printSingleProblem problem =
-    case problem of
-        BadOneOf problems ->
-            []
-
-        BadInt ->
-            [ greenText "a number" ]
-
-        BadRepeat ->
-            []
-
-        ExpectingSymbol symbol ->
-            [ "the symbol '"
-            , greenText <|
-                escapeSymbol symbol
-            , "'"
+        JSONSyntaxError { fileName, locale, errorMsg } ->
+            [ title "json decode error" fileName
+            , [ "There was an error while reading the translations for the locale '"
+              , locale
+              , "' in the file '"
+              , fileName
+              , ". The JSON decoder says:"
+              ]
+                |> String.concat
+                |> String.softWrap 80
+            , "\n\n"
+            , errorMsg
+                |> String.softWrap 70
+                |> indent
+            , "\n"
             ]
+                |> String.concat
 
-        ExpectingKeyword keyword ->
-            [ "the keyword '"
-            , greenText keyword
-            , "'"
+        NoTranslationsError { fileName, locale } ->
+            [ title "no translations error" fileName
+            , [ "There was an error while reading the translations for the locale '"
+              , locale
+              , "' in the file '"
+              , fileName
+              , ". The file does not contain any translations."
+              ]
+                |> String.concat
+                |> String.softWrap 80
             ]
-
-        ExpectingVariable ->
-            [ greenText "a variable" ]
-
-        Fail message ->
-            [ greenText message ]
-
-        _ ->
-            [ toString problem ]
+                |> String.concat
 
 
-escapeSymbol : String -> String
-escapeSymbol symbol =
-    case symbol of
-        "\n" ->
-            "\\n"
+{-| Apply a function which can fail onto each element of
+list. If at least one of them fails, return an error with a collection of all
+failures.
+-}
+mapWithErrors : (a -> Result Error b) -> List a -> Result Error (List b)
+mapWithErrors func listA =
+    listA
+        |> List.foldl
+            (\a resultListB ->
+                case resultListB of
+                    Ok listB ->
+                        case func a of
+                            Ok b ->
+                                Ok (b :: listB)
 
-        "\t" ->
-            "\\t"
+                            Err error ->
+                                Err [ error ]
 
-        _ ->
-            symbol
+                    Err errors ->
+                        case func a of
+                            Ok b ->
+                                resultListB
 
-
-
----- VIEW HELPER
-
-
-redText : String -> String
-redText text =
-    coloredText red text
-
-
-greenText : String -> String
-greenText text =
-    coloredText green text
-
-
-blueText : String -> String
-blueText text =
-    coloredText blue text
+                            Err error ->
+                                Err (error :: errors)
+            )
+            (Ok [])
+        |> Result.mapError Errors
 
 
-coloredText : String -> String -> String
-coloredText color text =
-    [ color
-    , text
-    , reset
-    ]
-        |> String.concat
+
+---- HELPER
 
 
-reset : String
-reset =
-    "\x1B[0m"
-
-
-red : String
-red =
-    "\x1B[31m"
-
-
-green : String
-green =
-    "\x1B[32m"
-
-
-blue : String
-blue =
-    "\x1B[34m"
-
-
-yellow : String
-yellow =
-    "\x1B[33m"
-
-
-(=>) : a -> b -> ( a, b )
-(=>) =
-    (,)
+indent : String -> String
+indent text =
+    text
+        |> String.split "\n"
+        |> List.map (\line -> "    " ++ line)
+        |> String.join "\n"

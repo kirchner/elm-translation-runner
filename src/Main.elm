@@ -2,7 +2,8 @@ module Main exposing (main)
 
 import Char
 import Dict exposing (Dict)
-import Error
+import Error exposing (Error(..), mapWithErrors)
+import Generate exposing (indent, joinLines, joinLinesWith)
 import Json.Decode as Decode exposing (Decoder, Value)
 import Json.Decode.Pipeline as Decode
 import Json.Encode as Encode
@@ -21,6 +22,16 @@ main =
         , update = update
         , subscriptions = subscriptions
         }
+
+
+
+---- MODEL
+
+
+type alias Model =
+    { config : Config
+    , files : Dict String String
+    }
 
 
 
@@ -96,16 +107,6 @@ modulePrefixDecoder =
                 else
                     String.split "." string
             )
-
-
-
----- MODEL
-
-
-type alias Model =
-    { config : Config
-    , files : Dict String String
-    }
 
 
 
@@ -350,121 +351,16 @@ writeFile { directory, name, content } =
         |> Ports.writeModule
 
 
-
----- ERRORS
-
-
-type Error
-    = Errors (List Error)
-    | MissingTranslations
-        { locale : String
-        , missingKeys : List String
-        }
-    | IcuSyntaxError
-        { file : String
-        , key : List String
-        , error : Parser.Error
-        }
-    | JSONSyntaxError
-        { fileName : String
-        , locale : String
-        , errorMsg : String
-        }
-    | NoTranslationsError
-        { fileName : String
-        , locale : String
-        }
-
-
 reportError : Error -> Cmd msg
 reportError error =
     [ ( "error"
       , error
-            |> printError
+            |> Error.print
             |> Encode.string
       )
     ]
         |> Encode.object
         |> Ports.reportError
-
-
-printError : Error -> String
-printError error =
-    let
-        title name location =
-            [ "\x1B[36m--"
-            , name
-                |> String.map Char.toUpper
-            , "-"
-                |> List.repeat (80 - 4 - String.length name - String.length location)
-                |> String.concat
-            , location
-            , "\x1B[0m"
-            ]
-                |> String.join " "
-    in
-    case error of
-        Errors errors ->
-            errors
-                |> List.map printError
-                |> String.join "\n\n"
-
-        IcuSyntaxError { file, key, error } ->
-            [ title "syntax error" file
-            , error
-                |> Error.print
-            ]
-                |> String.join "\n\n"
-
-        MissingTranslations { locale, missingKeys } ->
-            [ title "missing translations" ""
-            , [ [ "The locale '"
-                , locale
-                , "' is missing translations, which are given in another locale. The translation keys, which we cannot find translations for, are:"
-                ]
-                    |> String.concat
-                    |> String.softWrap 80
-              , [ missingKeys
-                    |> String.join ", "
-                    |> indent
-                , "\n"
-                ]
-                    |> String.concat
-              ]
-                |> String.join "\n\n"
-            ]
-                |> String.join "\n\n"
-
-        JSONSyntaxError { fileName, locale, errorMsg } ->
-            [ title "json decode error" fileName
-            , [ "There was an error while reading the translations for the locale '"
-              , locale
-              , "' in the file '"
-              , fileName
-              , ". The JSON decoder says:"
-              ]
-                |> String.concat
-                |> String.softWrap 80
-            , "\n\n"
-            , errorMsg
-                |> String.softWrap 70
-                |> indent
-            , "\n"
-            ]
-                |> String.concat
-
-        NoTranslationsError { fileName, locale } ->
-            [ title "no translations error" fileName
-            , [ "There was an error while reading the translations for the locale '"
-              , locale
-              , "' in the file '"
-              , fileName
-              , ". The file does not contain any translations."
-              ]
-                |> String.concat
-                |> String.softWrap 80
-            ]
-                |> String.concat
 
 
 
@@ -511,7 +407,7 @@ collectTranslations :
     -> Result Error (Dict Scope (Dict Key (Dict Locale String)))
 collectTranslations rawData =
     rawData
-        |> doCollectingErrors
+        |> mapWithErrors
             (\{ locale, fileName, rawJson } ->
                 case Decode.decodeString directoryDecoder rawJson of
                     Ok (Directory entries) ->
@@ -622,7 +518,7 @@ localesFile modules locales =
     { directory = modules
     , name = "Locales"
     , content =
-        [ generateModuleDeclaration modules "Locales"
+        [ Generate.moduleDeclaration modules "Locales"
         , [ "type Locale"
           , [ "= "
             , locales
@@ -676,14 +572,14 @@ translationsRouterFile modules locales (Module scope name) translations =
     { directory = actualModules
     , name = actualName
     , content =
-        [ [ generateModuleDeclaration actualModules (String.toSentenceCase actualName)
-          , [ [ generateImport modules "Locales"
-              , generateImportExposing [ "Translation" ] [] "Translation"
+        [ [ Generate.moduleDeclaration actualModules (String.toSentenceCase actualName)
+          , [ [ Generate.import_ modules "Locales"
+              , Generate.importExposing [ "Translation" ] [] "Translation"
               ]
             , locales
                 |> Set.toList
                 |> List.map String.toSentenceCase
-                |> List.map (generateQualifiedImport (actualModules ++ [ actualName ]))
+                |> List.map (Generate.qualifiedImport (actualModules ++ [ actualName ]))
             ]
                 |> List.concat
                 |> joinLines
@@ -758,7 +654,7 @@ translationsFiles :
             )
 translationsFiles modules ({ allLocales, translationsList } as data) =
     allLocales
-        |> doCollectingErrors (uncurry (translationsFilesForLocale modules translationsList))
+        |> mapWithErrors (uncurry (translationsFilesForLocale modules translationsList))
         |> Result.map (\list -> ( List.concat list, data ))
 
 
@@ -770,7 +666,7 @@ translationsFilesForLocale :
     -> Result Error (List File)
 translationsFilesForLocale modules translations locale fallbacks =
     translations
-        |> doCollectingErrors (uncurry (translationsFileForLocale modules locale fallbacks))
+        |> mapWithErrors (uncurry (translationsFileForLocale modules locale fallbacks))
 
 
 translationsFileForLocale :
@@ -792,7 +688,7 @@ translationsFileForLocale modules locale fallbacks (Module scope name) translati
     translations
         |> fetchTranslationsForLocale locale fallbacks
         |> Result.andThen
-            (doCollectingErrors
+            (mapWithErrors
                 (\( name, fetchedTranslation ) ->
                     generateMessage name fetchedTranslation
                         |> Result.mapError
@@ -809,11 +705,11 @@ translationsFileForLocale modules locale fallbacks (Module scope name) translati
                         { directory = actualModules
                         , name = actualModule
                         , content =
-                            [ [ generateModuleDeclaration actualModules
+                            [ [ Generate.moduleDeclaration actualModules
                                     (String.toSentenceCase locale)
-                              , [ generateImport [] "Translation"
-                                , generateImportExposing [ "Node" ] [] "VirtualDom"
-                                , generateImport [ "Translation" ] actualModule
+                              , [ Generate.import_ [] "Translation"
+                                , Generate.importExposing [ "Node" ] [] "VirtualDom"
+                                , Generate.import_ [ "Translation" ] actualModule
                                 ]
                                     |> joinLines
                               ]
@@ -975,114 +871,3 @@ merge dictA dictB =
         dictA
         dictB
         Dict.empty
-
-
-
----- CODE GENERATION HELPER
-
-
-indent : String -> String
-indent text =
-    text
-        |> String.split "\n"
-        |> List.map (\line -> "    " ++ line)
-        |> String.join "\n"
-
-
-joinLines : List String -> String
-joinLines =
-    joinLinesWith 0
-
-
-joinLinesWith : Int -> List String -> String
-joinLinesWith lineBreakCount lines =
-    let
-        lineBreaks =
-            "\n"
-                |> List.repeat (lineBreakCount + 1)
-                |> String.concat
-    in
-    lines
-        |> String.join lineBreaks
-
-
-generateModuleDeclaration : List String -> String -> String
-generateModuleDeclaration modules name =
-    [ "module"
-    , modules
-        ++ [ name ]
-        |> String.join "."
-    , "exposing (..)"
-    ]
-        |> String.join " "
-
-
-generateImport : List String -> String -> String
-generateImport modules name =
-    [ "import"
-    , modules
-        ++ [ name ]
-        |> String.join "."
-    , "exposing (..)"
-    ]
-        |> String.join " "
-
-
-generateImportExposing : List String -> List String -> String -> String
-generateImportExposing exposed modules name =
-    [ "import"
-    , modules
-        ++ [ name ]
-        |> String.join "."
-    , "exposing"
-    , [ "("
-      , exposed
-            |> String.join ", "
-      , ")"
-      ]
-        |> String.concat
-    ]
-        |> String.join " "
-
-
-generateQualifiedImport : List String -> String -> String
-generateQualifiedImport modules name =
-    [ "import"
-    , modules
-        ++ [ name ]
-        |> String.join "."
-    , "as"
-    , String.toSentenceCase name
-    , "exposing (..)"
-    ]
-        |> String.join " "
-
-
-
----- ERROR HELPER
-
-
-doCollectingErrors : (a -> Result Error b) -> List a -> Result Error (List b)
-doCollectingErrors func listA =
-    listA
-        |> List.foldl
-            (\a resultListB ->
-                case resultListB of
-                    Ok listB ->
-                        case func a of
-                            Ok b ->
-                                Ok (b :: listB)
-
-                            Err error ->
-                                Err [ error ]
-
-                    Err errors ->
-                        case func a of
-                            Ok b ->
-                                resultListB
-
-                            Err error ->
-                                Err (error :: errors)
-            )
-            (Ok [])
-        |> Result.mapError Errors
