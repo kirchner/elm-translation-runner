@@ -7,7 +7,7 @@
             "name": "en",
             "code": "en",
             "file-path": "./translations/en.json",
-            "fallbacks": []
+            "fallbacks": [ "de" ]
         },
         {
             "name": "de",

@@ -1,4 +1,5 @@
 {
+  "applicationName": "Yet Another Email Client",
   "feature": {
     "greeting": "Guten morgen, {name}!",
     "emailInfo": "Du hast {count, plural, one{# neue Email} other{# neue Emails}}."

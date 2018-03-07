@@ -2,7 +2,7 @@ module Main exposing (main)
 
 import Char
 import Dict exposing (Dict)
-import Error exposing (Error(..), mapDictWithErrors, mapWithErrors)
+import Error exposing (Error, mapDictWithErrors, mapWithErrors)
 import Generate exposing (indent, joinLines, joinLinesWith)
 import Json.Decode as Decode exposing (Decoder, Value)
 import Json.Decode.Pipeline as Decode
@@ -269,8 +269,10 @@ writeFile { directory, name, content } =
 reportError : Error -> Cmd msg
 reportError error =
     [ ( "error"
-      , error
-            |> Error.print
+      , [ Error.print error
+        , Error.epilog
+        ]
+            |> String.join "\n\n"
             |> Encode.string
       )
     ]
@@ -320,17 +322,38 @@ processFile locale path content =
                     (\( scope, name ) content ->
                         Translation.toElm cldrToArgType name content
                             |> Result.mapError
-                                (Error.icuSyntax path (scope ++ [ name ]))
+                                (\parserError ->
+                                    Error.IcuSyntax
+                                        { localeName = locale
+                                        , filePath = path
+                                        , scopeKey = ( scope, name )
+                                        , parserError = parserError
+                                        }
+                                )
                             |> Result.andThen
                                 (\final ->
                                     Translation.toFallbackElm cldrToArgType name content
                                         |> Result.mapError
-                                            (Error.icuSyntax path (scope ++ [ name ]))
+                                            (\parserError ->
+                                                Error.IcuSyntax
+                                                    { localeName = locale
+                                                    , filePath = path
+                                                    , scopeKey = ( scope, name )
+                                                    , parserError = parserError
+                                                    }
+                                            )
                                         |> Result.andThen
                                             (\fallback ->
                                                 Translation.toElmType cldrToArgType content
                                                     |> Result.mapError
-                                                        (Error.icuSyntax path (scope ++ [ name ]))
+                                                        (\parserError ->
+                                                            Error.IcuSyntax
+                                                                { localeName = locale
+                                                                , filePath = path
+                                                                , scopeKey = ( scope, name )
+                                                                , parserError = parserError
+                                                                }
+                                                        )
                                                     |> Result.map (TranslationCode final fallback)
                                             )
                                 )
@@ -338,7 +361,14 @@ processFile locale path content =
     in
     content
         |> Decode.decodeString directoryDecoder
-        |> Result.mapError (Error.jsonSyntax path locale)
+        |> Result.mapError
+            (\errorMsg ->
+                Error.JSONSyntax
+                    { localeName = locale
+                    , filePath = path
+                    , errorMsg = errorMsg
+                    }
+            )
         |> Result.map (flattenDirectory [])
         |> Result.andThen (generateTranslationsCode path)
 
@@ -375,17 +405,44 @@ collectTranslationCodeForLocale localeConfig translations =
                     Nothing
     in
     Dict.get localeConfig.name translations
-        |> Result.fromMaybe (MissingTranslationsFileFor localeConfig.name)
+        |> Result.fromMaybe
+            (Error.Unexpected <|
+                String.concat
+                    [ "We tried to get the translations for the locale '"
+                    , localeConfig.name
+                    , "' but they were not there. Actually, we thought this would never happen! Please open an issue on github.com/kirchner/elm-translation-runner including this error message so we can fix it."
+                    ]
+            )
         |> Result.andThen
             (\translationsForLocale ->
                 keys
                     |> Error.mapWithErrors
                         (\key ->
+                            let
+                                availableFallbackLocales =
+                                    translations
+                                        |> Dict.toList
+                                        |> List.filterMap
+                                            (\( locale, translations ) ->
+                                                case Dict.get key translations of
+                                                    Nothing ->
+                                                        Nothing
+
+                                                    Just _ ->
+                                                        Just locale
+                                            )
+                            in
                             Dict.get key translationsForLocale
                                 |> Maybe.map (.final >> Just)
                                 |> Maybe.withDefault (getFallbackTranslationCode key)
                                 |> Result.fromMaybe
-                                    (MissingTranslationFor localeConfig.name key)
+                                    (Error.MissingTranslation
+                                        { localeName = localeConfig.name
+                                        , filePath = localeConfig.filePath
+                                        , availableFallbackLocales = availableFallbackLocales
+                                        , scopeKey = key
+                                        }
+                                    )
                                 |> Result.map (\code -> ( key, code ))
                         )
                     |> Result.map Dict.fromList
