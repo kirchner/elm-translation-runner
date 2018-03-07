@@ -1,6 +1,5 @@
 "use strict";
 
-const compile = require("node-elm-compiler").compile;
 const fs = require("fs");
 const path = require("path");
 const mkdirp = require("mkdirp");
@@ -20,7 +19,7 @@ var generateConfig = function(argv) {
     process.exit(1);
   }
 
-  var translationFiles = [];
+  var locales = [];
 
   var files = fs.readdirSync(translationsDirectory);
 
@@ -29,9 +28,11 @@ var generateConfig = function(argv) {
     if (match) {
       var locale = match[1];
       
-      translationFiles.push({
-        "path": [ translationsDirectory, file ].join(path.sep),
-        "locale": locale
+      locales.push({
+        "name": locale,
+        "code": locale,
+        "file-path": [ translationsDirectory, file ].join(path.sep),
+        "fallbacks": []
       });
     }
   });
@@ -39,7 +40,8 @@ var generateConfig = function(argv) {
   var config = {
     "source-directory": argv["source-directory"],
     "module-prefix": argv["module-prefix"],
-    "translation-files": translationFiles
+    "module-name": argv["module-name"],
+    "locales": locales
   };
 
   fs.writeFile("./elm-translation.json", JSON.stringify(config, null, 4), function(error) {
@@ -57,63 +59,66 @@ var generateConfig = function(argv) {
 var generateElm = function() {
   fs.readFile("./elm-translation.json", function(error, data) {
     if (error) {
-      console.log("There was a problem while reading the configuration:", error);
+      if (error["code"] == "ENOENT") {
+        console.log("I could not find the configuration file elm-translation.json,")
+        console.log("please run\n")
+        console.log("  $ elm-translation init\n")
+      } else {
+        console.log("There was a problem while reading the configuration:", error);
+      }
       process.exit(1);
     }
 
     var config = JSON.parse(data)
 
-    //compile(["src/Main.elm"], { output: "main.js" })
-    //  .on("close", function(exitCode) {
-        var Elm = require("./main.js");
+    var Elm = require("./main.js");
 
-        var worker = Elm.Main.worker(config);
+    var worker = Elm.Main.worker(config);
 
-        worker.ports.fetchFile.subscribe(function(path) {
-          var content =
-            fs
-              .readFileSync(path)
-              .toString();
+    worker.ports.fetchFile.subscribe(function(path) {
+      var content =
+        fs
+          .readFileSync(path)
+          .toString();
 
-          worker.ports.fileReceived.send({
-            "path": path,
-            "content": content
-          });
-        });
+      worker.ports.fileReceived.send({
+        "path": path,
+        "content": content
+      });
+    });
 
-        worker.ports.writeModule.subscribe(function(data) {
-          var scope = data["scope"];
-          var content = data["content"];
+    worker.ports.writeModule.subscribe(function(data) {
+      var scope = data["scope"];
+      var content = data["content"];
 
-          var modulePath =
+      var modulePath =
+        [ config["source-directory"] ]
+          .concat(scope)
+          .join(path.sep) + ".elm";
+
+      console.log(modulePath);
+
+      mkdirp(path.dirname(modulePath), function(error) {
+        if (error) {
+          console.log("could not create directories");
+        } else {
+          fs.writeFileSync(
             [ config["source-directory"] ]
               .concat(scope)
-              .join(path.sep) + ".elm";
+              .join(path.sep) + ".elm",
+            content
+          );
+        }
+      });
+    });
 
-          console.log(modulePath);
+    worker.ports.reportError.subscribe(function(data) {
+      var errorMsg = data["error"];
 
-          mkdirp(path.dirname(modulePath), function(error) {
-            if (error) {
-              console.log("could not create directories");
-            } else {
-              fs.writeFileSync(
-                [ config["source-directory"] ]
-                  .concat(scope)
-                  .join(path.sep) + ".elm",
-                content
-              );
-            }
-          });
-        });
+      console.log(errorMsg);
 
-        worker.ports.reportError.subscribe(function(data) {
-          var errorMsg = data["error"];
-
-          console.log(errorMsg);
-
-          process.exit(1);
-        });
-      //});
+      process.exit(1);
+    });
   });
 };
 
@@ -122,16 +127,20 @@ const argv =
   require ("yargs")
     .command(
       "init",
-      "create a initial configuration in elm-translation.json",
+      "create an initial configuration file elm-translation.json",
       function(yargs) {
         yargs
           .option("translations-directory", {
             describe: "under which directory should we look for translation files",
             default: "./translations"
           })
-          .option("module-prefix", {
-            describe: "the module under which all translations live",
+          .option("module-name", {
+            describe: "the name of the (top-level) translations module",
             default: "Translations"
+          })
+          .option("module-prefix", {
+            describe: "the module under which the translations module should live",
+            default: ""
           })
           .option("source-directory", {
             decribe: "where should generated modules be saved",
@@ -150,8 +159,9 @@ const argv =
         generateElm();
       }
     )
-    .command(
-      "generate-json",
-      "convert Elm Translation modules into JSON"
-    )
+    // TODO
+    //.command(
+    //  "generate-json",
+    //  "convert Elm Translation modules into JSON"
+    //)
     .argv;
