@@ -14,28 +14,28 @@ var generateConfig = function(argv) {
 
   var translationsDirectory = argv["translations-directory"];
 
-  if (!fs.existsSync(translationsDirectory)) {
-    console.log("The directory '" + translationsDirectory + "' does not exist.");
-    process.exit(1);
-  }
-
   var locales = [];
 
-  var files = fs.readdirSync(translationsDirectory);
+  if (!fs.existsSync(translationsDirectory)) {
+    console.log("The directory '" + translationsDirectory + "' does not exist.");
+    console.log("We will therefore not automatically search for translation files.");
+  } else {
+    var files = fs.readdirSync(translationsDirectory);
 
-  files.forEach(function(file) {
-    var match = /^([^\.]\w*)\.json$/.exec(file)
-    if (match) {
-      var locale = match[1];
-      
-      locales.push({
-        "name": locale,
-        "code": locale,
-        "file-path": [ translationsDirectory, file ].join(path.sep),
-        "fallbacks": []
-      });
-    }
-  });
+    files.forEach(function(file) {
+      var match = /^([^\.]\w*)\.json$/.exec(file)
+      if (match) {
+        var locale = match[1];
+
+        locales.push({
+          "name": locale,
+          "code": locale,
+          "file-path": [ translationsDirectory, file ].join(path.sep),
+          "fallbacks": []
+        });
+      }
+    });
+  }
 
   var config = {
     "source-directory": argv["source-directory"],
