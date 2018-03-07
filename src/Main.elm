@@ -49,27 +49,15 @@ type alias Config =
 type alias LocaleConfig =
     { name : String
     , code : String
-    , files : List FileConfig
+    , filePath : String
     , fallbacks : List String
-    }
-
-
-type alias FileConfig =
-    { path : String
-    , modulePrefix : List String
     }
 
 
 requiredFilesPaths : Config -> List String
 requiredFilesPaths config =
     config.locales
-        |> List.foldl
-            (\locale files ->
-                locale.files
-                    |> List.map .path
-                    |> List.append files
-            )
-            []
+        |> List.map .filePath
 
 
 configDecoder : Decoder Config
@@ -86,15 +74,8 @@ localeConfigDecoder =
     Decode.succeed LocaleConfig
         |> Decode.required "name" Decode.string
         |> Decode.required "code" Decode.string
-        |> Decode.required "files" (Decode.list fileConfigDecoder)
+        |> Decode.required "file-path" Decode.string
         |> Decode.required "fallbacks" (Decode.list Decode.string)
-
-
-fileConfigDecoder : Decoder FileConfig
-fileConfigDecoder =
-    Decode.succeed FileConfig
-        |> Decode.required "path" Decode.string
-        |> Decode.required "module-prefix" modulePrefixDecoder
 
 
 modulePrefixDecoder : Decoder (List String)
@@ -121,8 +102,7 @@ init value =
               , files = Dict.empty
               }
             , config.locales
-                |> List.map (.files >> List.map (.path >> Ports.fetchFile))
-                |> List.concat
+                |> List.map (.filePath >> Ports.fetchFile)
                 |> Cmd.batch
             )
 
@@ -198,18 +178,13 @@ processFiles model =
                 model.config.locales
                     |> List.map
                         (\locale ->
-                            locale.files
-                                |> List.map
-                                    (\file ->
-                                        { locale = locale.code
-                                        , fileName = file.path
-                                        , rawJson =
-                                            Dict.get file.path model.files
-                                                |> Maybe.withDefault "{}"
-                                        }
-                                    )
+                            { locale = locale.code
+                            , fileName = locale.filePath
+                            , rawJson =
+                                Dict.get locale.filePath model.files
+                                    |> Maybe.withDefault "{}"
+                            }
                         )
-                    |> List.concat
 
             collect byScope =
                 { allLocales =

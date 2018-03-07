@@ -6,23 +6,13 @@
         {
             "name": "en",
             "code": "en",
-            "files": [
-                {
-                    "path": "./translations/en.json",
-                    "module-prefix": ""
-                }
-            ],
+            "file-path": "./translations/en.json",
             "fallbacks": []
         },
         {
             "name": "de",
             "code": "de",
-            "files": [
-                {
-                    "path": "./translations/de.json",
-                    "module-prefix": ""
-                }
-            ],
+            "file-path": "./translations/de.json",
             "fallbacks": [ "en" ]
         }
     ]
