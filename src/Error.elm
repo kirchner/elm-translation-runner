@@ -1,11 +1,15 @@
 module Error
     exposing
         ( Error(..)
+        , icuSyntax
+        , jsonSyntax
+        , mapDictWithErrors
         , mapWithErrors
         , print
         )
 
 import Char
+import Dict exposing (Dict)
 import Error.Icu
 import Parser
 import String.Extra as String
@@ -13,6 +17,8 @@ import String.Extra as String
 
 type Error
     = Errors (List Error)
+    | MissingTranslationsFileFor String
+    | MissingTranslationFor String ( List String, String )
     | MissingTranslations
         { locale : String
         , missingKeys : List String
@@ -33,6 +39,24 @@ type Error
         }
 
 
+jsonSyntax : String -> String -> String -> Error
+jsonSyntax path locale errorMsg =
+    JSONSyntaxError
+        { fileName = path
+        , locale = locale
+        , errorMsg = errorMsg
+        }
+
+
+icuSyntax : String -> List String -> Parser.Error -> Error
+icuSyntax path key parserError =
+    IcuSyntaxError
+        { file = path
+        , key = key
+        , error = parserError
+        }
+
+
 print : Error -> String
 print error =
     let
@@ -49,6 +73,12 @@ print error =
                 |> String.join " "
     in
     case error of
+        MissingTranslationsFileFor locale ->
+            Debug.crash "add error"
+
+        MissingTranslationFor locale key ->
+            Debug.crash "add error"
+
         Errors errors ->
             errors
                 |> List.map print
@@ -139,6 +169,35 @@ mapWithErrors func listA =
                                 Err (error :: errors)
             )
             (Ok [])
+        |> Result.mapError Errors
+
+
+mapDictWithErrors :
+    (comparable -> a -> Result Error b)
+    -> Dict comparable a
+    -> Result Error (Dict comparable b)
+mapDictWithErrors func dictA =
+    dictA
+        |> Dict.foldl
+            (\comparable a resultDictB ->
+                case resultDictB of
+                    Ok dictB ->
+                        case func comparable a of
+                            Ok b ->
+                                Ok (Dict.insert comparable b dictB)
+
+                            Err error ->
+                                Err [ error ]
+
+                    Err errors ->
+                        case func comparable a of
+                            Ok b ->
+                                resultDictB
+
+                            Err error ->
+                                Err (error :: errors)
+            )
+            (Ok Dict.empty)
         |> Result.mapError Errors
 
 

@@ -2,7 +2,7 @@ module Main exposing (main)
 
 import Char
 import Dict exposing (Dict)
-import Error exposing (Error(..), mapWithErrors)
+import Error exposing (Error(..), mapDictWithErrors, mapWithErrors)
 import Generate exposing (indent, joinLines, joinLinesWith)
 import Json.Decode as Decode exposing (Decoder, Value)
 import Json.Decode.Pipeline as Decode
@@ -31,6 +31,17 @@ main =
 type alias Model =
     { config : Config
     , files : Dict String String
+    }
+
+
+
+---- FILE
+
+
+type alias File =
+    { directory : List String
+    , name : String
+    , content : String
     }
 
 
@@ -173,125 +184,54 @@ processFiles model =
     if requiredFiles /= receivedFiles then
         ( model, Cmd.none )
     else
-        let
-            locales =
-                model.config.locales
-                    |> List.map
-                        (\locale ->
-                            { locale = locale.code
-                            , fileName = locale.filePath
-                            , rawJson =
-                                Dict.get locale.filePath model.files
-                                    |> Maybe.withDefault "{}"
-                            }
-                        )
-
-            collect byScope =
-                { allLocales =
-                    collectLocales byScope
-                        |> List.map
-                            (\localeName ->
-                                ( localeName
-                                , model.config.locales
-                                    |> List.filter (\locale -> locale.name == localeName)
-                                    |> List.head
-                                    |> Maybe.map (\locale -> locale.fallbacks)
-                                    |> Maybe.withDefault []
-                                )
-                            )
-                , translationsList =
-                    collectTranslationsList
-                        model.config.modulePrefix
-                        model.config.moduleName
-                        byScope
-                }
-        in
         ( model
-        , collectTranslations locales
-            |> Result.andThen
-                (collect
-                    >> translationsFiles model.config.modulePrefix
-                    >> Result.map
-                        (\( files, { allLocales, translationsList } ) ->
-                            [ translationsList
-                                |> translationsRouterFiles model.config.modulePrefix
-                                    (allLocales
-                                        |> List.map Tuple.first
-                                        |> Set.fromList
-                                    )
-                                |> List.map writeFile
-                                |> Cmd.batch
-                            , files
-                                |> List.map writeFile
-                                |> Cmd.batch
-                            , allLocales
-                                |> List.map Tuple.first
-                                |> Set.fromList
-                                |> localesFile model.config.modulePrefix
-                                |> writeFile
-                            ]
-                                |> Cmd.batch
-                        )
-                )
-            |> (\result ->
-                    case result of
-                        Ok cmd ->
-                            cmd
-
-                        Err error ->
-                            error
-                                |> reportError
-               )
-        )
-
-
-collectTranslationsList :
-    List String
-    -> String
-    -> Dict Scope (Dict Key (Dict Locale String))
-    -> List ( Module, List ( String, Dict Locale String ) )
-collectTranslationsList modules root byScope =
-    let
-        allLocales =
-            collectLocales byScope
-    in
-    byScope
-        |> Dict.toList
-        |> List.map
-            (\( scope, byKey ) ->
-                let
-                    scopeLength =
-                        List.length scope
-                in
-                case
-                    ( List.take (scopeLength - 1) scope
-                    , List.drop (scopeLength - 1) scope
+        , case
+            model.config.locales
+                |> Error.mapWithErrors
+                    (\localeConfig ->
+                        Dict.get localeConfig.filePath model.files
+                            |> Maybe.withDefault "{}"
+                            |> processFile localeConfig.name localeConfig.filePath
+                            |> Result.map (\translations -> ( localeConfig.name, translations ))
                     )
-                of
-                    ( modules, name :: [] ) ->
-                        ( Module (modules ++ [ root ]) name
-                        , Dict.toList byKey
-                        )
+                |> Result.map Dict.fromList
+                |> Result.andThen
+                    (\translations ->
+                        model.config.locales
+                            |> Error.mapWithErrors
+                                (\localeConfig ->
+                                    collectTranslationCodeForLocale
+                                        localeConfig
+                                        translations
+                                        |> Result.map
+                                            (generateTranslationFiles
+                                                model.config.modulePrefix
+                                                model.config.moduleName
+                                                localeConfig
+                                            )
+                                )
+                            |> Result.map List.concat
+                            |> Result.map
+                                (List.append <|
+                                    generateLocalesFile
+                                        model.config.modulePrefix
+                                        model.config.locales
+                                        :: generateTranslationRouterFiles
+                                            model.config.modulePrefix
+                                            model.config.moduleName
+                                            model.config.locales
+                                            translations
+                                )
+                    )
+          of
+            Err error ->
+                reportError error
 
-                    ( modules, [] ) ->
-                        ( Module modules root
-                        , Dict.toList byKey
-                        )
-
-                    _ ->
-                        Debug.crash "should not happen"
-            )
-
-
-
----- FILES
-
-
-type alias File =
-    { directory : List String
-    , name : String
-    , content : String
-    }
+            Ok files ->
+                files
+                    |> List.map writeFile
+                    |> Cmd.batch
+        )
 
 
 writeFile : File -> Cmd msg
@@ -339,7 +279,300 @@ reportError error =
 
 
 
----- TRANSLATIONS
+---- COLLECT TRANSLATIONS
+
+
+type alias TranslationCode =
+    { final : String
+    , fallback : String
+    , typeSignature : String
+    }
+
+
+processFile :
+    String
+    -> String
+    -> String
+    -> Result Error (Dict ( List String, String ) TranslationCode)
+processFile locale path content =
+    let
+        flattenDirectory scope directory =
+            case directory of
+                Entry entry ->
+                    case List.reverse scope of
+                        [] ->
+                            Dict.empty
+
+                        name :: reversedScope ->
+                            Dict.singleton ( List.reverse reversedScope, name ) entry
+
+                Directory namedSubDirectories ->
+                    namedSubDirectories
+                        |> List.map
+                            (\( name, subDirectory ) ->
+                                flattenDirectory (scope ++ [ name ]) subDirectory
+                            )
+                        |> List.foldl Dict.union Dict.empty
+
+        generateTranslationsCode path translations =
+            translations
+                |> mapDictWithErrors
+                    (\( scope, name ) content ->
+                        Translation.toElm cldrToArgType name content
+                            |> Result.mapError
+                                (Error.icuSyntax path (scope ++ [ name ]))
+                            |> Result.andThen
+                                (\final ->
+                                    Translation.toFallbackElm cldrToArgType name content
+                                        |> Result.mapError
+                                            (Error.icuSyntax path (scope ++ [ name ]))
+                                        |> Result.andThen
+                                            (\fallback ->
+                                                Translation.toElmType cldrToArgType content
+                                                    |> Result.mapError
+                                                        (Error.icuSyntax path (scope ++ [ name ]))
+                                                    |> Result.map (TranslationCode final fallback)
+                                            )
+                                )
+                    )
+    in
+    content
+        |> Decode.decodeString directoryDecoder
+        |> Result.mapError (Error.jsonSyntax path locale)
+        |> Result.map (flattenDirectory [])
+        |> Result.andThen (generateTranslationsCode path)
+
+
+collectTranslationCodeForLocale :
+    LocaleConfig
+    -> Dict String (Dict ( List String, String ) TranslationCode)
+    -> Result Error (Dict ( List String, String ) String)
+collectTranslationCodeForLocale localeConfig translations =
+    let
+        keys =
+            translations
+                |> Dict.values
+                |> List.map (Dict.keys >> Set.fromList)
+                |> List.foldl Set.union Set.empty
+                |> Set.toList
+
+        getFallbackTranslationCode key =
+            localeConfig.fallbacks
+                |> List.foldl
+                    (\fallbackLocale maybeTranslationCode ->
+                        case maybeTranslationCode of
+                            Just _ ->
+                                maybeTranslationCode
+
+                            Nothing ->
+                                Dict.get fallbackLocale translations
+                                    |> Maybe.andThen
+                                        (\translationsForFallbackLocale ->
+                                            Dict.get key translationsForFallbackLocale
+                                                |> Maybe.map .fallback
+                                        )
+                    )
+                    Nothing
+    in
+    Dict.get localeConfig.name translations
+        |> Result.fromMaybe (MissingTranslationsFileFor localeConfig.name)
+        |> Result.andThen
+            (\translationsForLocale ->
+                keys
+                    |> Error.mapWithErrors
+                        (\key ->
+                            Dict.get key translationsForLocale
+                                |> Maybe.map (.final >> Just)
+                                |> Maybe.withDefault (getFallbackTranslationCode key)
+                                |> Result.fromMaybe
+                                    (MissingTranslationFor localeConfig.name key)
+                                |> Result.map (\code -> ( key, code ))
+                        )
+                    |> Result.map Dict.fromList
+            )
+
+
+generateTranslationFiles :
+    List String
+    -> String
+    -> LocaleConfig
+    -> Dict ( List String, String ) String
+    -> List File
+generateTranslationFiles modulePrefix moduleName localeConfig translationCodes =
+    translationCodes
+        |> Dict.foldl
+            (\( scope, key ) code byModule ->
+                byModule
+                    |> Dict.update scope
+                        (\maybeCodes ->
+                            case maybeCodes of
+                                Nothing ->
+                                    Just [ ( key, code ) ]
+
+                                Just codes ->
+                                    Just (( key, code ) :: codes)
+                        )
+            )
+            Dict.empty
+        |> Dict.toList
+        |> List.map
+            (\( scope, translations ) ->
+                let
+                    sanitizedScope =
+                        List.map String.toSentenceCase scope
+
+                    sanitizedName =
+                        String.toSentenceCase localeConfig.name
+
+                    sanitizedCode =
+                        String.toSentenceCase localeConfig.code
+                in
+                { directory = modulePrefix ++ (moduleName :: sanitizedScope)
+                , name = sanitizedName
+                , content =
+                    [ [ Generate.moduleDeclaration
+                            (modulePrefix ++ (moduleName :: sanitizedScope))
+                            sanitizedName
+                      , [ Generate.import_ [] "Translation"
+                        , Generate.import_ [ "Translation" ] sanitizedCode
+                        ]
+                            |> joinLines
+                      ]
+                        |> joinLinesWith 1
+                    , translations
+                        |> List.sortBy Tuple.first
+                        |> List.map Tuple.second
+                        |> joinLinesWith 2
+                    ]
+                        |> joinLinesWith 2
+                }
+            )
+
+
+generateTranslationRouterFiles :
+    List String
+    -> String
+    -> List LocaleConfig
+    -> Dict String (Dict ( List String, String ) TranslationCode)
+    -> List File
+generateTranslationRouterFiles modulePrefix moduleName locales translations =
+    translations
+        |> Dict.values
+        |> List.foldl
+            (\translations byModule ->
+                translations
+                    |> Dict.foldl
+                        (\( scope, key ) code byModule ->
+                            byModule
+                                |> Dict.update scope
+                                    (\maybeKeysCodes ->
+                                        case maybeKeysCodes of
+                                            Nothing ->
+                                                Just [ ( key, code.typeSignature ) ]
+
+                                            Just keysCodes ->
+                                                Just (( key, code.typeSignature ) :: keysCodes)
+                                    )
+                                |> Dict.map (\_ -> Dict.fromList >> Dict.toList)
+                        )
+                        byModule
+            )
+            Dict.empty
+        |> Dict.toList
+        |> List.map
+            (\( scope, keysCodes ) ->
+                let
+                    ( directory, name ) =
+                        case List.reverse scope of
+                            [] ->
+                                ( modulePrefix
+                                , moduleName
+                                )
+
+                            rawName :: rawScope ->
+                                ( [ modulePrefix
+                                  , [ moduleName ]
+                                  , rawScope
+                                        |> List.reverse
+                                        |> List.map String.toSentenceCase
+                                  ]
+                                    |> List.concat
+                                , String.toSentenceCase rawName
+                                )
+                in
+                { directory = directory
+                , name = name
+                , content =
+                    [ [ Generate.moduleDeclaration directory name
+                      , [ [ Generate.import_ modulePrefix "Locales"
+                          , Generate.importExposing [ "Translation" ] [] "Translation"
+                          ]
+                        , locales
+                            |> List.map (.name >> String.toSentenceCase)
+                            |> List.map (Generate.qualifiedImport (directory ++ [ name ]))
+                        ]
+                            |> List.concat
+                            |> joinLines
+                      ]
+                        |> joinLinesWith 1
+                    , keysCodes
+                        |> List.map
+                            (\( key, code ) ->
+                                [ String.join " " [ key, ": Locale ->", code ]
+                                , String.join " " [ key, "locale =" ]
+                                , [ "case locale of"
+                                  , locales
+                                        |> List.map
+                                            (\locale ->
+                                                let
+                                                    sanitizedLocaleName =
+                                                        String.toSentenceCase locale.name
+                                                in
+                                                [ sanitizedLocaleName ++ " ->"
+                                                , [ sanitizedLocaleName, ".", key ]
+                                                    |> String.concat
+                                                    |> indent
+                                                ]
+                                                    |> joinLines
+                                            )
+                                        |> joinLinesWith 1
+                                        |> indent
+                                  ]
+                                    |> joinLines
+                                    |> indent
+                                ]
+                                    |> joinLines
+                            )
+                        |> joinLinesWith 2
+                    ]
+                        |> joinLinesWith 2
+                }
+            )
+
+
+generateLocalesFile : List String -> List LocaleConfig -> File
+generateLocalesFile modulePrefix locales =
+    { directory = modulePrefix
+    , name = "Locales"
+    , content =
+        [ Generate.moduleDeclaration modulePrefix "Locales"
+        , [ "type Locale"
+          , [ "= "
+            , locales
+                |> List.map (.name >> String.toSentenceCase)
+                |> String.join "\n| "
+            ]
+                |> String.concat
+                |> indent
+          ]
+            |> String.join "\n"
+        ]
+            |> String.join "\n\n\n"
+    }
+
+
+
+---- DECODER
 
 
 type alias Scope =
@@ -367,411 +600,6 @@ directoryDecoder =
         , Decode.string
             |> Decode.map Entry
         ]
-
-
-
----- COLLECT TRANSLATIONS
-
-
-collectTranslations :
-    List
-        { locale : String
-        , fileName : String
-        , rawJson : String
-        }
-    -> Result Error (Dict Scope (Dict Key (Dict Locale String)))
-collectTranslations rawData =
-    rawData
-        |> mapWithErrors
-            (\{ locale, fileName, rawJson } ->
-                case Decode.decodeString directoryDecoder rawJson of
-                    Ok (Directory entries) ->
-                        Ok
-                            ( locale
-                            , translationsByScope entries
-                            )
-
-                    Ok _ ->
-                        Err <|
-                            NoTranslationsError
-                                { fileName = fileName
-                                , locale = locale
-                                }
-
-                    Err error ->
-                        Err <|
-                            JSONSyntaxError
-                                { fileName = fileName
-                                , locale = locale
-                                , errorMsg = error
-                                }
-            )
-        |> Result.map collectTranslationsHelp
-
-
-collectTranslationsHelp :
-    List ( Locale, Dict Scope (Dict Key String) )
-    -> Dict Scope (Dict Key (Dict Locale String))
-collectTranslationsHelp translations =
-    translations
-        |> List.foldl
-            (\( locale, translationsByScope ) collected ->
-                translationsByScope
-                    |> Dict.toList
-                    |> List.foldl
-                        (\( scope, translations ) collected ->
-                            let
-                                newTranslationsByKeyAndLocale =
-                                    translations
-                                        |> Dict.map (\_ -> Dict.singleton locale)
-                            in
-                            collected
-                                |> Dict.update scope
-                                    (Maybe.withDefault Dict.empty
-                                        >> merge newTranslationsByKeyAndLocale
-                                        >> Just
-                                    )
-                        )
-                        collected
-            )
-            Dict.empty
-
-
-translationsByScope : List ( Key, Directory ) -> Dict Scope (Dict Key String)
-translationsByScope entries =
-    entries
-        |> List.map (uncurry (translationsByScopeHelp []))
-        |> List.foldr merge Dict.empty
-
-
-translationsByScopeHelp :
-    List String
-    -> Key
-    -> Directory
-    -> Dict (List String) (Dict String String)
-translationsByScopeHelp scope name directory =
-    case directory of
-        Entry newMessage ->
-            Dict.singleton (List.reverse scope) (Dict.singleton name newMessage)
-
-        Directory entries ->
-            entries
-                |> List.map (uncurry (translationsByScopeHelp (name :: scope)))
-                |> List.foldr merge Dict.empty
-
-
-
----- COLLECT LOCALES
-
-
-collectLocales : Dict Scope (Dict Key (Dict Locale String)) -> List String
-collectLocales translations =
-    translations
-        |> Dict.values
-        |> List.foldl
-            (\byKey locales ->
-                byKey
-                    |> Dict.values
-                    |> List.foldl
-                        (\byLocale locales ->
-                            byLocale
-                                |> Dict.keys
-                                |> List.foldl Set.insert locales
-                        )
-                        locales
-            )
-            Set.empty
-        |> Set.toList
-
-
-
----- GENERATE LOCALES MODULE FILE
-
-
-localesFile : List String -> Set String -> File
-localesFile modules locales =
-    { directory = modules
-    , name = "Locales"
-    , content =
-        [ Generate.moduleDeclaration modules "Locales"
-        , [ "type Locale"
-          , [ "= "
-            , locales
-                |> Set.toList
-                |> List.map String.toSentenceCase
-                |> String.join "\n| "
-            ]
-                |> String.concat
-                |> indent
-          ]
-            |> String.join "\n"
-        ]
-            |> String.join "\n\n\n"
-    }
-
-
-
----- GENERATE TRANSLATIONS ROUTER MODULE FILES
-
-
-type Module
-    = Module (List String) String
-
-
-translationsRouterFiles :
-    List String
-    -> Set String
-    -> List ( Module, List ( Key, Dict Locale String ) )
-    -> List File
-translationsRouterFiles modules locales translations =
-    List.map
-        (uncurry (translationsRouterFile modules locales))
-        translations
-
-
-translationsRouterFile :
-    List String
-    -> Set String
-    -> Module
-    -> List ( Key, Dict Locale String )
-    -> File
-translationsRouterFile modules locales (Module scope name) translations =
-    let
-        actualName =
-            String.toSentenceCase name
-
-        actualModules =
-            (modules ++ scope)
-                |> List.map String.toSentenceCase
-    in
-    { directory = actualModules
-    , name = actualName
-    , content =
-        [ [ Generate.moduleDeclaration actualModules (String.toSentenceCase actualName)
-          , [ [ Generate.import_ modules "Locales"
-              , Generate.importExposing [ "Translation" ] [] "Translation"
-              ]
-            , locales
-                |> Set.toList
-                |> List.map String.toSentenceCase
-                |> List.map (Generate.qualifiedImport (actualModules ++ [ actualName ]))
-            ]
-                |> List.concat
-                |> joinLines
-          ]
-            |> joinLinesWith 1
-        , translations
-            |> List.map (uncurry (generateTranslationFunction locales))
-            |> joinLinesWith 2
-        ]
-            |> joinLinesWith 2
-    }
-
-
-generateTranslationFunction : Set String -> Key -> Dict Locale String -> String
-generateTranslationFunction locales key byLocale =
-    [ [ key
-      , ": Locale ->"
-      , byLocale
-            |> Dict.values
-            |> List.head
-            |> Maybe.andThen
-                (Translation.toElmType cldrToArgType
-                    >> Result.toMaybe
-                )
-            |> Maybe.withDefault "TODO: error"
-      ]
-        |> String.join " "
-    , [ key
-      , "locale ="
-      ]
-        |> String.join " "
-    , [ "case locale of"
-      , locales
-            |> Set.toList
-            |> List.map
-                (\locale ->
-                    [ String.toSentenceCase locale ++ " ->"
-                    , [ String.toSentenceCase locale
-                      , "."
-                      , key
-                      ]
-                        |> String.concat
-                        |> indent
-                    ]
-                        |> joinLines
-                )
-            |> joinLinesWith 1
-            |> indent
-      ]
-        |> joinLines
-        |> indent
-    ]
-        |> joinLines
-
-
-
----- GENERATE TRANSLATIONS MODULE FILES
-
-
-translationsFiles :
-    List String
-    ->
-        { allLocales : List ( Locale, List Locale )
-        , translationsList : List ( Module, List ( Key, Dict Locale String ) )
-        }
-    ->
-        Result Error
-            ( List File
-            , { allLocales : List ( Locale, List Locale )
-              , translationsList : List ( Module, List ( Key, Dict Locale String ) )
-              }
-            )
-translationsFiles modules ({ allLocales, translationsList } as data) =
-    allLocales
-        |> mapWithErrors (uncurry (translationsFilesForLocale modules translationsList))
-        |> Result.map (\list -> ( List.concat list, data ))
-
-
-translationsFilesForLocale :
-    List String
-    -> List ( Module, List ( Key, Dict Locale String ) )
-    -> Locale
-    -> List Locale
-    -> Result Error (List File)
-translationsFilesForLocale modules translations locale fallbacks =
-    translations
-        |> mapWithErrors (uncurry (translationsFileForLocale modules locale fallbacks))
-
-
-translationsFileForLocale :
-    List String
-    -> Locale
-    -> List Locale
-    -> Module
-    -> List ( Key, Dict Locale String )
-    -> Result Error File
-translationsFileForLocale modules locale fallbacks (Module scope name) translations =
-    let
-        actualModules =
-            (modules ++ scope ++ [ name ])
-                |> List.map String.toSentenceCase
-
-        actualModule =
-            String.toSentenceCase locale
-    in
-    translations
-        |> fetchTranslationsForLocale locale fallbacks
-        |> Result.andThen
-            (mapWithErrors
-                (\( name, fetchedTranslation ) ->
-                    generateMessage name fetchedTranslation
-                        |> Result.mapError
-                            (\error ->
-                                IcuSyntaxError
-                                    { file = ""
-                                    , key = [ name ]
-                                    , error = error
-                                    }
-                            )
-                )
-                >> Result.map
-                    (\messages ->
-                        { directory = actualModules
-                        , name = actualModule
-                        , content =
-                            [ [ Generate.moduleDeclaration actualModules
-                                    (String.toSentenceCase locale)
-                              , [ Generate.import_ [] "Translation"
-                                , Generate.importExposing [ "Node" ] [] "VirtualDom"
-                                , Generate.import_ [ "Translation" ] actualModule
-                                ]
-                                    |> joinLines
-                              ]
-                                |> joinLinesWith 1
-                            , joinLinesWith 2 messages
-                            ]
-                                |> joinLinesWith 2
-                        }
-                    )
-            )
-
-
-type FetchedTranslation
-    = Final String
-    | Fallback String
-
-
-fetchTranslationsForLocale :
-    Locale
-    -> List Locale
-    -> List ( Key, Dict Locale String )
-    -> Result Error (List ( Key, FetchedTranslation ))
-fetchTranslationsForLocale locale fallbacks translations =
-    let
-        getTranslation byLocale =
-            case Dict.get locale byLocale of
-                Just translation ->
-                    Just (Final translation)
-
-                Nothing ->
-                    fallbacks
-                        |> List.foldl
-                            (\fallbackLocale maybeTranslation ->
-                                case maybeTranslation of
-                                    Just _ ->
-                                        maybeTranslation
-
-                                    Nothing ->
-                                        Dict.get fallbackLocale byLocale
-                                            |> Maybe.map Fallback
-                            )
-                            Nothing
-    in
-    translations
-        |> List.foldl
-            (\( key, byLocale ) translationsResult ->
-                case translationsResult of
-                    Ok translations ->
-                        case getTranslation byLocale of
-                            Just translation ->
-                                Ok (( key, translation ) :: translations)
-
-                            Nothing ->
-                                Err [ key ]
-
-                    Err missingKeys ->
-                        case getTranslation byLocale of
-                            Just _ ->
-                                translationsResult
-
-                            Nothing ->
-                                Err (key :: missingKeys)
-            )
-            (Ok [])
-        |> Result.mapError
-            (\missingKeys ->
-                MissingTranslations
-                    { locale = locale
-                    , missingKeys = missingKeys
-                    }
-            )
-
-
-generateMessage : String -> FetchedTranslation -> Result Parser.Error String
-generateMessage name fetchedTranslation =
-    case fetchedTranslation of
-        Final translation ->
-            Translation.toElm cldrToArgType (String.camelize name) translation
-
-        Fallback translation ->
-            Translation.toFallbackElm cldrToArgType (String.camelize name) translation
-
-
-moduleName : List String -> String
-moduleName =
-    List.map (String.toSentenceCase >> String.camelize)
-        >> String.join "."
 
 
 
@@ -825,24 +653,3 @@ cldrToArgType names =
 
         _ ->
             Nothing
-
-
-
----- HELPER
-
-
-{-| Merge two dictionaries of the form `Dict a (Dict b c)` by taking the union
-on the inner dictionaries.
--}
-merge :
-    Dict comparable1 (Dict comparable2 a)
-    -> Dict comparable1 (Dict comparable2 a)
-    -> Dict comparable1 (Dict comparable2 a)
-merge dictA dictB =
-    Dict.merge
-        Dict.insert
-        (\scope a b collection -> Dict.insert scope (Dict.union a b) collection)
-        Dict.insert
-        dictA
-        dictB
-        Dict.empty
