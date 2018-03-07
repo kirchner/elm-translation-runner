@@ -85,3 +85,45 @@ Note, that you will have to add `kirchner/elm-translation` and
 $ elm-package install kirchner/elm-translation
 $ elm-package install kirchner/elm-cldr
 ```
+
+
+## Options
+
+If you only want to include a certain subset of your locales, you can do
+
+```
+$ elm-translation generate-elm --for en de fr
+```
+
+If you only want to compile in one specific locale and have no `Locale` argument in your translations at all, you have to run
+
+```
+$ elm-translation generate-elm --only-for en
+```
+
+For the above example, you then can use the generated modules like this:
+
+```elm
+import Html exposing (Html)
+import Translation exposing (asString, asStringWith)
+import Translations as T
+import Translations.Feature as TFeature
+
+view : String -> String -> Html msg
+view name email =
+    Html.div []
+        [ T.greeting
+            |> asString
+            |> Html.text
+        , T.question
+            |> asStringWith
+                { name = name
+                , email = email
+                }
+            |> Html.text
+        , TFeature.title
+            |> asString
+        ]
+```
+
+This way, you can build seperate Javascript assets for each locale.

@@ -54,6 +54,8 @@ type alias Config =
     , modulePrefix : List String
     , moduleName : String
     , locales : List LocaleConfig
+    , onlyFor : Maybe String
+    , for : Maybe (List String)
     }
 
 
@@ -78,6 +80,8 @@ configDecoder =
         |> Decode.required "module-prefix" modulePrefixDecoder
         |> Decode.required "module-name" Decode.string
         |> Decode.required "locales" (Decode.list localeConfigDecoder)
+        |> Decode.required "only-for" (Decode.nullable Decode.string)
+        |> Decode.required "for" (Decode.nullable (Decode.list Decode.string))
 
 
 localeConfigDecoder : Decoder LocaleConfig
@@ -211,16 +215,96 @@ processFiles model =
                                             )
                                 )
                             |> Result.map List.concat
-                            |> Result.map
-                                (List.append <|
-                                    generateLocalesFile
-                                        model.config.modulePrefix
-                                        model.config.locales
-                                        :: generateTranslationRouterFiles
-                                            model.config.modulePrefix
-                                            model.config.moduleName
-                                            model.config.locales
-                                            translations
+                            |> Result.andThen
+                                (\translationFiles ->
+                                    case ( model.config.for, model.config.onlyFor ) of
+                                        ( Just for, Nothing ) ->
+                                            case
+                                                for
+                                                    |> List.foldl
+                                                        (\localeName maybeInvalidLocaleNames ->
+                                                            case maybeInvalidLocaleNames of
+                                                                Nothing ->
+                                                                    if
+                                                                        List.member localeName
+                                                                            (List.map .name model.config.locales)
+                                                                    then
+                                                                        Nothing
+                                                                    else
+                                                                        Just [ localeName ]
+
+                                                                Just invalidLocaleNames ->
+                                                                    if
+                                                                        List.member localeName
+                                                                            (List.map .name model.config.locales)
+                                                                    then
+                                                                        maybeInvalidLocaleNames
+                                                                    else
+                                                                        Just (localeName :: invalidLocaleNames)
+                                                        )
+                                                        Nothing
+                                            of
+                                                Nothing ->
+                                                    let
+                                                        usedLocales =
+                                                            model.config.locales
+                                                                |> List.filterMap
+                                                                    (\locale ->
+                                                                        if
+                                                                            List.member locale.name
+                                                                                for
+                                                                        then
+                                                                            Just locale
+                                                                        else
+                                                                            Nothing
+                                                                    )
+                                                    in
+                                                    [ generateLocalesFile
+                                                        model.config.modulePrefix
+                                                        usedLocales
+                                                        :: generateTranslationRouterFiles
+                                                            model.config.modulePrefix
+                                                            model.config.moduleName
+                                                            usedLocales
+                                                            translations
+                                                    , translationFiles
+                                                    ]
+                                                        |> List.concat
+                                                        |> Ok
+
+                                                Just invalidLocaleNames ->
+                                                    Err (Error.InvalidLocaleNames invalidLocaleNames)
+
+                                        ( Nothing, Just onlyFor ) ->
+                                            if List.member onlyFor (List.map .name model.config.locales) then
+                                                [ generateTrivialTranslationRouterFiles
+                                                    model.config.modulePrefix
+                                                    model.config.moduleName
+                                                    onlyFor
+                                                    translations
+                                                , translationFiles
+                                                ]
+                                                    |> List.concat
+                                                    |> Ok
+                                            else
+                                                Err (Error.InvalidLocaleNames [ onlyFor ])
+
+                                        ( Nothing, Nothing ) ->
+                                            [ generateLocalesFile
+                                                model.config.modulePrefix
+                                                model.config.locales
+                                                :: generateTranslationRouterFiles
+                                                    model.config.modulePrefix
+                                                    model.config.moduleName
+                                                    model.config.locales
+                                                    translations
+                                            , translationFiles
+                                            ]
+                                                |> List.concat
+                                                |> Ok
+
+                                        ( Just _, Just _ ) ->
+                                            Debug.crash "TODO: report error"
                                 )
                     )
           of
@@ -596,6 +680,86 @@ generateTranslationRouterFiles modulePrefix moduleName locales translations =
                                         |> indent
                                   ]
                                     |> joinLines
+                                    |> indent
+                                ]
+                                    |> joinLines
+                            )
+                        |> joinLinesWith 2
+                    ]
+                        |> joinLinesWith 2
+                }
+            )
+
+
+generateTrivialTranslationRouterFiles :
+    List String
+    -> String
+    -> String
+    -> Dict String (Dict ( List String, String ) TranslationCode)
+    -> List File
+generateTrivialTranslationRouterFiles modulePrefix moduleName localeName translations =
+    translations
+        |> Dict.values
+        |> List.foldl
+            (\translations byModule ->
+                translations
+                    |> Dict.foldl
+                        (\( scope, key ) code byModule ->
+                            byModule
+                                |> Dict.update scope
+                                    (\maybeKeysCodes ->
+                                        case maybeKeysCodes of
+                                            Nothing ->
+                                                Just [ ( key, code.typeSignature ) ]
+
+                                            Just keysCodes ->
+                                                Just (( key, code.typeSignature ) :: keysCodes)
+                                    )
+                                |> Dict.map (\_ -> Dict.fromList >> Dict.toList)
+                        )
+                        byModule
+            )
+            Dict.empty
+        |> Dict.toList
+        |> List.map
+            (\( scope, keysCodes ) ->
+                let
+                    ( directory, name ) =
+                        case List.reverse scope of
+                            [] ->
+                                ( modulePrefix
+                                , moduleName
+                                )
+
+                            rawName :: rawScope ->
+                                ( [ modulePrefix
+                                  , [ moduleName ]
+                                  , rawScope
+                                        |> List.reverse
+                                        |> List.map String.toSentenceCase
+                                  ]
+                                    |> List.concat
+                                , String.toSentenceCase rawName
+                                )
+                in
+                { directory = directory
+                , name = name
+                , content =
+                    [ [ Generate.moduleDeclaration directory name
+                      , [ Generate.importExposing [ "Translation" ] [] "Translation"
+                        , localeName
+                            |> String.toSentenceCase
+                            |> Generate.qualifiedImport (directory ++ [ name ])
+                        ]
+                            |> joinLines
+                      ]
+                        |> joinLinesWith 1
+                    , keysCodes
+                        |> List.map
+                            (\( key, code ) ->
+                                [ String.join " " [ key, ": ", code ]
+                                , String.join " " [ key, " =" ]
+                                , String.join "." [ String.toSentenceCase localeName, key ]
                                     |> indent
                                 ]
                                     |> joinLines

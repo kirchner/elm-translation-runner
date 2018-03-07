@@ -56,7 +56,7 @@ var generateConfig = function(argv) {
 
 
 
-var generateElm = function() {
+var generateElm = function(argv) {
   fs.readFile("./elm-translation.json", function(error, data) {
     if (error) {
       if (error["code"] == "ENOENT") {
@@ -69,7 +69,18 @@ var generateElm = function() {
       process.exit(1);
     }
 
-    var config = JSON.parse(data)
+    var config = JSON.parse(data);
+
+    if (argv["only-for"] !== undefined) {
+      config["only-for"] = argv["only-for"];
+      config["for"] = null;
+    } else if (argv["for"] !== undefined) {
+      config["only-for"] = null;
+      config["for"] = argv["for"];
+    } else {
+      config["only-for"] = null;
+      config["for"] = null;
+    }
 
     var Elm = require("./main.js");
 
@@ -154,9 +165,19 @@ const argv =
     .command(
       "generate-elm",
       "convert JSON into Elm Translation modules",
-      function() {},
+      function(yargs) {
+        yargs
+          .option("for", {
+            describe: "only include the provided locales in the translation router modules",
+            type: "array"
+          })
+          .option("only-for", {
+            describe: "generate a 'trivial' translation router which is fixed to the provided locale",
+            type: "string"
+          })
+      },
       function(argv) {
-        generateElm();
+        generateElm(argv);
       }
     )
     // TODO

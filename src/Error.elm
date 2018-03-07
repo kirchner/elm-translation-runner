@@ -17,6 +17,7 @@ import String.Extra as String
 type Error
     = Errors (List Error)
     | Unexpected String
+    | InvalidLocaleNames (List String)
     | MissingTranslation
         { localeName : String
         , filePath : String
@@ -38,7 +39,7 @@ type Error
 
 epilog : String
 epilog =
-    [ "Where the above error messages helpful? If not, feel free to open an issue on "
+    [ "Were the above error messages helpful? If not, feel free to open an issue on "
     , yellowText "github.com/kirchner/elm-translation-runner"
     , " including the error and a short explaination why they did not help you!"
     ]
@@ -89,6 +90,19 @@ print error =
         Unexpected message ->
             [ title "unexpected error" ""
             , String.softWrap 80 message
+            ]
+                |> String.join "\n\n"
+
+        InvalidLocaleNames invalidLocaleNames ->
+            [ title "INVALID LOCALE NAMES" ""
+            , [ "I cannot find the locales "
+              , invalidLocaleNames
+                    |> List.map yellowText
+                    |> String.join ", "
+              , ". Please check the configuration in elm-translation.json, if these are actually the names of your locales."
+              ]
+                |> String.concat
+                |> String.softWrap 80
             ]
                 |> String.join "\n\n"
 
