@@ -320,7 +320,7 @@ processFile locale path content =
             translations
                 |> mapDictWithErrors
                     (\( scope, name ) content ->
-                        Translation.toElm cldrToArgType name content
+                        Translation.toElm cldrToArgType scope name content
                             |> Result.mapError
                                 (\parserError ->
                                     Error.IcuSyntax
@@ -332,7 +332,7 @@ processFile locale path content =
                                 )
                             |> Result.andThen
                                 (\final ->
-                                    Translation.toFallbackElm cldrToArgType name content
+                                    Translation.toFallbackElm cldrToArgType scope name content
                                         |> Result.mapError
                                             (\parserError ->
                                                 Error.IcuSyntax

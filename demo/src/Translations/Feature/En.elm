@@ -6,7 +6,7 @@ import Translation.En exposing (..)
 
 emailInfo : Translation { args | count : Float } node
 emailInfo =
-    final "emailInfo" <|
+    final "feature.emailInfo" <|
         concat
             [ s "You have "
             , cardinal decimalStandard .count "count" <|
@@ -27,7 +27,7 @@ emailInfo =
 
 greeting : Translation { args | name : String } node
 greeting =
-    final "greeting" <|
+    final "feature.greeting" <|
         concat
             [ s "Good morning, "
             , string .name "name"
@@ -37,5 +37,5 @@ greeting =
 
 missingInDe : Translation args node
 missingInDe =
-    final "missingInDe" <|
+    final "feature.missingInDe" <|
         s "I am not translated to German."
