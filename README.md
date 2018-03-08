@@ -1,5 +1,4 @@
-# Translation Runner
-
+# Translation Runner [![Build Status](https://travis-ci.org/kirchner/elm-translation-runner.svg?branch=master)](https://travis-ci.org/kirchner/elm-translation-runner)
 This program generates Elm modules with Translations from JSON-files. The
 generated code uses
 [`kirchner/elm-translation`](https://github.com/kirchner/elm-translation) and
