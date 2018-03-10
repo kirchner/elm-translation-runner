@@ -404,38 +404,38 @@ processFile locale path content =
             translations
                 |> mapDictWithErrors
                     (\( scope, name ) content ->
-                        Translation.toElm cldrToArgType scope name content
+                        Translation.toElm Translation.cldrToArgType scope name content
                             |> Result.mapError
-                                (\parserError ->
-                                    Error.IcuSyntax
+                                (\icuErrors ->
+                                    Error.IcuErrors
                                         { localeName = locale
                                         , filePath = path
                                         , scopeKey = ( scope, name )
-                                        , parserError = parserError
+                                        , icuErrors = icuErrors
                                         }
                                 )
                             |> Result.andThen
                                 (\final ->
-                                    Translation.toFallbackElm cldrToArgType scope name content
+                                    Translation.toFallbackElm Translation.cldrToArgType scope name content
                                         |> Result.mapError
-                                            (\parserError ->
-                                                Error.IcuSyntax
+                                            (\icuErrors ->
+                                                Error.IcuErrors
                                                     { localeName = locale
                                                     , filePath = path
                                                     , scopeKey = ( scope, name )
-                                                    , parserError = parserError
+                                                    , icuErrors = icuErrors
                                                     }
                                             )
                                         |> Result.andThen
                                             (\fallback ->
-                                                Translation.toElmType cldrToArgType content
+                                                Translation.toElmType Translation.cldrToArgType content
                                                     |> Result.mapError
-                                                        (\parserError ->
-                                                            Error.IcuSyntax
+                                                        (\icuErrors ->
+                                                            Error.IcuErrors
                                                                 { localeName = locale
                                                                 , filePath = path
                                                                 , scopeKey = ( scope, name )
-                                                                , parserError = parserError
+                                                                , icuErrors = icuErrors
                                                                 }
                                                         )
                                                     |> Result.map (TranslationCode final fallback)
@@ -821,56 +821,3 @@ directoryDecoder =
         , Decode.string
             |> Decode.map Entry
         ]
-
-
-
----- CONFIGURATION
-
-
-cldrToArgType names =
-    case names of
-        "_" :: "delimited" :: otherNames ->
-            Just (ArgDelimited otherNames)
-
-        "_" :: "list" :: otherNames ->
-            Just (ArgList otherNames)
-
-        _ :: "number" :: otherNames ->
-            (Just << ArgFloat) <|
-                case otherNames of
-                    [] ->
-                        [ "decimal", "standard" ]
-
-                    _ ->
-                        "decimal" :: otherNames
-
-        _ :: "date" :: otherNames ->
-            Just (ArgDate otherNames)
-
-        _ :: "time" :: otherNames ->
-            Just (ArgTime otherNames)
-
-        _ :: "plural" :: otherNames ->
-            case otherNames of
-                [] ->
-                    Just (ArgCardinal [ "decimal", "standard" ])
-
-                _ ->
-                    Just (ArgCardinal otherNames)
-
-        _ :: "selectordinal" :: otherNames ->
-            case otherNames of
-                [] ->
-                    Just (ArgOrdinal [ "decimal", "standard" ])
-
-                _ ->
-                    Just (ArgOrdinal otherNames)
-
-        _ :: "node" :: [] ->
-            Just ArgNode
-
-        _ :: [] ->
-            Just ArgString
-
-        _ ->
-            Nothing

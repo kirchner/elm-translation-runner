@@ -4,7 +4,18 @@ import Translation exposing (..)
 import Translation.De exposing (..)
 
 
-emailInfo : Translation { args | count : Float } node
+documentationInfo : Translation { args | documentation : List node -> node } node
+documentationInfo =
+    final "feature.documentationInfo" <|
+        concat
+            [ s "Please take a look at our "
+            , node .documentation "documentation" <|
+                s "documentation"
+            , s "."
+            ]
+
+
+emailInfo : Translation args node
 emailInfo =
     final "feature.emailInfo" <|
         concat
@@ -39,3 +50,16 @@ missingInDe : Translation args node
 missingInDe =
     fallback "feature.missingInDe" <|
         s "I am not translated to German."
+
+
+teamInfo : Translation args node
+teamInfo =
+    final "feature.teamInfo" <|
+        concat
+            [ s "Our Team: "
+            , list and
+                [ s "Alice"
+                , s "Bob"
+                , s "Cindy"
+                ]
+            ]

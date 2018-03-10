@@ -6,7 +6,17 @@ import Translations.Feature.En as En exposing (..)
 import Translations.Feature.De as De exposing (..)
 
 
-emailInfo : Locale -> Translation { args | count : Float } node
+documentationInfo : Locale -> Translation { args | documentation : List node -> node } node
+documentationInfo locale =
+    case locale of
+        En ->
+            En.documentationInfo
+
+        De ->
+            De.documentationInfo
+
+
+emailInfo : Locale -> Translation args node
 emailInfo locale =
     case locale of
         En ->
@@ -34,3 +44,13 @@ missingInDe locale =
 
         De ->
             De.missingInDe
+
+
+teamInfo : Locale -> Translation args node
+teamInfo locale =
+    case locale of
+        En ->
+            En.teamInfo
+
+        De ->
+            De.teamInfo

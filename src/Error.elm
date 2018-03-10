@@ -12,6 +12,7 @@ import Dict exposing (Dict)
 import List.Extra as List
 import Parser
 import String.Extra as String
+import Translation
 
 
 type Error
@@ -24,11 +25,11 @@ type Error
         , availableFallbackLocales : List String
         , scopeKey : ( List String, String )
         }
-    | IcuSyntax
+    | IcuErrors
         { localeName : String
         , filePath : String
         , scopeKey : ( List String, String )
-        , parserError : Parser.Error
+        , icuErrors : List Translation.Error
         }
     | JSONSyntax
         { localeName : String
@@ -41,7 +42,7 @@ epilog : String
 epilog =
     [ "Were the above error messages helpful? If not, feel free to open an issue on "
     , yellowText "github.com/kirchner/elm-translation-runner"
-    , " including the error and a short explaination why they did not help you!"
+    , " including the error and a short explanation why they did not help you!"
     ]
         |> String.concat
         |> String.softWrap 80
@@ -49,38 +50,6 @@ epilog =
 
 print : Error -> String
 print error =
-    let
-        title name location =
-            [ "\x1B[36m--"
-            , name
-                |> String.map Char.toUpper
-            , "-"
-                |> List.repeat (80 - 5 - String.length name - String.length location)
-                |> String.concat
-            , location
-            , "\x1B[0m"
-            ]
-                |> String.join " "
-
-        printScope scope =
-            if List.isEmpty scope then
-                "{\n"
-            else
-                [ "{\n"
-                , scope
-                    |> List.indexedMap
-                        (\deepness name ->
-                            [ String.repeat (deepness + 1) "  "
-                            , quote name
-                            , ": {"
-                            ]
-                                |> String.concat
-                        )
-                    |> String.join "\n"
-                , "\n"
-                ]
-                    |> String.concat
-    in
     case error of
         Errors errors ->
             errors
@@ -142,54 +111,9 @@ print error =
             ]
                 |> String.join "\n\n"
 
-        IcuSyntax data ->
-            let
-                ( scope, key ) =
-                    data.scopeKey
-
-                arrow =
-                    String.repeat data.parserError.col " " ++ "^"
-            in
-            [ title "icu syntax error" data.filePath
-            , [ "A translation for the locale "
-              , yellowText data.localeName
-              , " contains an ICU syntax error: "
-              , [ "I ran into a problem while parsing "
-                , data.parserError.context
-                    |> List.head
-                    |> Maybe.map .description
-                    |> Maybe.map blueText
-                    |> Maybe.withDefault ""
-                , data.parserError.context
-                    |> List.drop 1
-                    |> List.head
-                    |> Maybe.map .description
-                    |> Maybe.map (\desc -> " of " ++ desc)
-                    |> Maybe.withDefault ""
-                , ":"
-                ]
-                    |> String.concat
-              ]
-                |> String.concat
-                |> String.softWrap 80
-            , [ printScope scope
-              , String.repeat (1 + List.length scope) "  "
-              , yellowText (quote key)
-              , ": "
-              , quote data.parserError.source
-              , "\n"
-              , String.repeat (6 + String.length key + (2 * List.length scope)) " "
-              , redText arrow
-              ]
-                |> String.concat
-                |> indent
-            , [ data.parserError.problem
-                    |> printProblem
-                    |> String.concat
-              , "\n"
-              ]
-                |> String.concat
-            ]
+        IcuErrors data ->
+            data.icuErrors
+                |> List.map (printIcuError data)
                 |> String.join "\n\n"
 
         JSONSyntax data ->
@@ -209,6 +133,220 @@ print error =
                 |> String.concat
             ]
                 |> String.join "\n\n"
+
+
+printIcuError :
+    { rest
+        | localeName : String
+        , filePath : String
+        , scopeKey : ( List String, String )
+    }
+    -> Translation.Error
+    -> String
+printIcuError data icuError =
+    let
+        ( scope, key ) =
+            data.scopeKey
+
+        printSource source from to =
+            [ printScope scope
+            , String.repeat (1 + List.length scope) "  "
+            , yellowText (quote key)
+            , ": "
+            , quote source
+            , "\n"
+            , String.repeat (6 + String.length key + (2 * List.length scope)) " "
+            , [ String.repeat (1 + from) " "
+              , String.repeat (1 + to - from) "^"
+              ]
+                |> String.concat
+                |> redText
+            ]
+                |> String.concat
+                |> indent
+
+        printSourceMarkSubMessages source ranges =
+            [ printScope scope
+            , String.repeat (1 + List.length scope) "  "
+            , yellowText (quote key)
+            , ": "
+            , quote source
+            , "\n"
+            , String.repeat (8 + String.length key + (2 * List.length scope)) " "
+            , ranges
+                |> List.sortBy .from
+                |> List.foldl
+                    (\{ from, to } ( previousTo, arrows ) ->
+                        ( to
+                        , [ arrows
+                          , String.repeat (from - previousTo - 1) " "
+                          , String.repeat (1 + to - from) "^"
+                          ]
+                            |> String.concat
+                        )
+                    )
+                    ( 0, "" )
+                |> Tuple.second
+                |> redText
+            ]
+                |> String.concat
+                |> indent
+    in
+    case icuError of
+        Translation.ParserError parserError ->
+            [ title "icu syntax error" data.filePath
+            , [ "A translation for the locale "
+              , yellowText data.localeName
+              , " contains an ICU syntax error: "
+              , [ "I ran into a problem while parsing "
+                , parserError.context
+                    |> List.head
+                    |> Maybe.map .description
+                    |> Maybe.map blueText
+                    |> Maybe.withDefault ""
+                , parserError.context
+                    |> List.drop 1
+                    |> List.head
+                    |> Maybe.map .description
+                    |> Maybe.map (\desc -> " of " ++ desc)
+                    |> Maybe.withDefault ""
+                , ":"
+                ]
+                    |> String.concat
+              ]
+                |> String.concat
+                |> String.softWrap 80
+            , printSource parserError.source
+                (parserError.col - 1)
+                (parserError.col - 1)
+            , [ parserError.problem
+                    |> printProblem
+                    |> String.concat
+              , "\n"
+              ]
+                |> String.concat
+            ]
+                |> String.join "\n\n"
+
+        Translation.ArgumentError argumentError ->
+            case argumentError.problem of
+                Translation.BadArgumentType ->
+                    [ title "undeducable argument type" data.filePath
+                    , [ "We cannot deduce any argument type from the names "
+                      , [ "[ "
+                        , (argumentError.placeholder :: argumentError.names)
+                            |> List.map quote
+                            |> String.join ", "
+                        , " ]"
+                        ]
+                            |> String.concat
+                            |> yellowText
+                      , " within the following translation for the locale "
+                      , yellowText data.localeName
+                      , ": "
+                      ]
+                        |> String.concat
+                        |> String.softWrap 80
+                    , printSource argumentError.source argumentError.from argumentError.to
+                    ]
+                        |> String.join "\n\n"
+
+                Translation.ExpectingSingleUnnamedSubMessage ->
+                    [ title "expecting single unnamed submessage" data.filePath
+                    , [ "We expected only a single unnamed submessage for the placeholder "
+                      , yellowText argumentError.placeholder
+                      , " in the following translation for the locale "
+                      , yellowText data.localeName
+                      , ":"
+                      ]
+                        |> String.concat
+                        |> String.softWrap 80
+                    , printSourceMarkSubMessages argumentError.source <|
+                        List.concat
+                            [ argumentError.unnamedSubMessages
+                                |> List.sortBy .from
+                                |> List.drop 1
+                            , argumentError.namedSubMessages
+                                |> List.map
+                                    (\named ->
+                                        { from = named.from
+                                        , to = named.to
+                                        }
+                                    )
+                            ]
+                    ]
+                        |> String.join "\n\n"
+
+                Translation.ExpectingOnlyUnnamedSubMessages ->
+                    [ title "expecting only unnamed submessages" data.filePath
+                    , [ "We expected unnamed submessages for the placeholder "
+                      , yellowText argumentError.placeholder
+                      , " in a translation for the locale "
+                      , yellowText data.localeName
+                      , ":"
+                      ]
+                        |> String.concat
+                        |> String.softWrap 80
+                    , printSourceMarkSubMessages
+                        argumentError.source
+                        argumentError.namedSubMessages
+                    ]
+                        |> String.join "\n\n"
+
+                Translation.ExpectingOnlyNamedSubMessages expectedNames ->
+                    [ title "expecting named submessages" data.filePath
+                    , [ "We expected the submessages of the placeholder "
+                      , yellowText argumentError.placeholder
+                      , " to be one of: "
+                      , expectedNames
+                            |> List.map quote
+                            |> String.join ", "
+                      , ".  This was within a translation for the locale "
+                      , yellowText data.localeName
+                      , ":"
+                      ]
+                        |> String.concat
+                        |> String.softWrap 80
+                    , printSourceMarkSubMessages
+                        argumentError.source
+                        argumentError.unnamedSubMessages
+                    ]
+                        |> String.join "\n\n"
+
+
+title : String -> String -> String
+title name location =
+    [ "\x1B[36m--"
+    , name
+        |> String.map Char.toUpper
+    , "-"
+        |> List.repeat (80 - 5 - String.length name - String.length location)
+        |> String.concat
+    , location
+    , "\x1B[0m"
+    ]
+        |> String.join " "
+
+
+printScope : List String -> String
+printScope scope =
+    if List.isEmpty scope then
+        "{\n"
+    else
+        [ "{\n"
+        , scope
+            |> List.indexedMap
+                (\deepness name ->
+                    [ String.repeat (deepness + 1) "  "
+                    , quote name
+                    , ": {"
+                    ]
+                        |> String.concat
+                )
+            |> String.join "\n"
+        , "\n"
+        ]
+            |> String.concat
 
 
 {-| Apply a function which can fail onto each element of

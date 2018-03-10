@@ -2,6 +2,8 @@
   "applicationName": "Yet Another Email Client",
   "feature": {
     "greeting": "Guten morgen, {name}!",
+    "documentationInfo": "Please take a look at our {documentation, node, {documentation}}.",
+    "teamInfo": "Our Team: {_, list, and, {Alice} {Bob} {Cindy}}",
     "emailInfo": "Du hast {count, plural, one{# neue Email} other{# neue Emails}}."
   }
 }
