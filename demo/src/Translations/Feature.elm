@@ -44,13 +44,3 @@ missingInDe locale =
 
         De ->
             De.missingInDe
-
-
-teamInfo : Locale -> Translation args node
-teamInfo locale =
-    case locale of
-        En ->
-            En.teamInfo
-
-        De ->
-            De.teamInfo

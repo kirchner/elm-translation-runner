@@ -20,7 +20,7 @@ emailInfo =
     final "feature.emailInfo" <|
         concat
             [ s "You have "
-            , cardinal decimalStandard .count "count" <|
+            , cardinal decimalLatnStandard .count "count" <|
                 { one =
                     concat
                         [ count
@@ -50,16 +50,3 @@ missingInDe : Translation args node
 missingInDe =
     final "feature.missingInDe" <|
         s "I am not translated to German."
-
-
-teamInfo : Translation args node
-teamInfo =
-    fallback "feature.teamInfo" <|
-        concat
-            [ s "Our Team: "
-            , list and
-                [ s "Alice"
-                , s "Bob"
-                , s "Cindy"
-                ]
-            ]

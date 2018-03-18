@@ -12,7 +12,7 @@ import Dict exposing (Dict)
 import List.Extra as List
 import Parser
 import String.Extra as String
-import Translation
+import Translation.Generate as Translation
 
 
 type Error
@@ -230,7 +230,7 @@ printIcuError data icuError =
 
         Translation.ArgumentError argumentError ->
             case argumentError.problem of
-                Translation.BadArgumentType ->
+                Translation.BadArgument ->
                     [ title "undeducable argument type" data.filePath
                     , [ "We cannot deduce any argument type from the names "
                       , [ "[ "
