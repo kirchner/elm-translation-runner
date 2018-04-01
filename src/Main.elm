@@ -68,15 +68,15 @@ type alias LocaleConfig =
 
 
 type alias CldrHelper =
-    { printers : List Printer
-    , pluralizations : List Pluralization
+    { printers : Dict String Printer
+    , pluralizations : Dict String Pluralization
     }
 
 
 emptyCldrHelper : CldrHelper
 emptyCldrHelper =
-    { printers = []
-    , pluralizations = []
+    { printers = Dict.empty
+    , pluralizations = Dict.empty
     }
 
 
@@ -101,8 +101,8 @@ configDecoder =
 cldrHelperDecoder : Decoder CldrHelper
 cldrHelperDecoder =
     Decode.succeed CldrHelper
-        |> Decode.required "printers" (Decode.list Printer.decoder)
-        |> Decode.required "pluralizations" (Decode.list Pluralization.decoder)
+        |> Decode.required "printers" (Decode.dict Printer.decoder)
+        |> Decode.required "pluralizations" (Decode.dict Pluralization.decoder)
 
 
 localeConfigDecoder : Decoder LocaleConfig
@@ -407,7 +407,7 @@ type alias TranslationCode =
 
 
 processFile :
-    List Printer
+    Dict String Printer
     -> String
     -> String
     -> String
@@ -479,6 +479,11 @@ processFile printers locale path content =
                                 )
                     )
 
+        camelizeNames names =
+            names
+                |> String.join "-"
+                |> String.camelize
+
         toArgument names =
             case names of
                 [] ->
@@ -489,15 +494,13 @@ processFile printers locale path content =
 
                 "plural" :: otherNames ->
                     printers
-                        |> List.map (\printer -> ( printer.icuNames, printer ))
-                        |> Dict.fromList
-                        |> Dict.get otherNames
+                        |> Dict.get (camelizeNames otherNames)
                         |> Maybe.andThen
                             (\printer ->
                                 if printer.type_ == Printer.Float then
                                     Just <|
                                         Generate.Cardinal
-                                            { name = printer.name
+                                            { name = camelizeNames otherNames
                                             , moduleName = printer.module_
                                             }
                                 else
@@ -506,15 +509,13 @@ processFile printers locale path content =
 
                 "selectordinal" :: otherNames ->
                     printers
-                        |> List.map (\printer -> ( printer.icuNames, printer ))
-                        |> Dict.fromList
-                        |> Dict.get otherNames
+                        |> Dict.get (camelizeNames otherNames)
                         |> Maybe.andThen
                             (\printer ->
                                 if printer.type_ == Printer.Float then
                                     Just <|
                                         Generate.Ordinal
-                                            { name = printer.name
+                                            { name = camelizeNames otherNames
                                             , moduleName = printer.module_
                                             }
                                 else
@@ -523,14 +524,12 @@ processFile printers locale path content =
 
                 _ ->
                     printers
-                        |> List.map (\printer -> ( printer.icuNames, printer ))
-                        |> Dict.fromList
-                        |> Dict.get names
+                        |> Dict.get (camelizeNames names)
                         |> Maybe.map
                             (\printer ->
                                 let
                                     function =
-                                        { name = printer.name
+                                        { name = camelizeNames names
                                         , moduleName = printer.module_
                                         }
                                 in
