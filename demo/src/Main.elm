@@ -2,7 +2,7 @@ module Main exposing (main)
 
 import Html
 import Locales exposing (..)
-import Translation exposing (asString, asStringWith)
+import Text exposing (asString, asStringWith)
 import Translations.Feature exposing (..)
 
 

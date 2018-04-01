@@ -1,12 +1,12 @@
 module Translations.Feature exposing (..)
 
 import Locales exposing (..)
-import Translation exposing (Translation)
+import Text exposing (Static, Text)
 import Translations.Feature.En as En exposing (..)
 import Translations.Feature.De as De exposing (..)
 
 
-documentationInfo : Locale -> Translation { args | documentation : List node -> node } node
+documentationInfo : Locale -> Text Static { args | documentation : List node -> node } node
 documentationInfo locale =
     case locale of
         En ->
@@ -16,7 +16,7 @@ documentationInfo locale =
             De.documentationInfo
 
 
-emailInfo : Locale -> Translation args node
+emailInfo : Locale -> Text Static { args | count : Float } node
 emailInfo locale =
     case locale of
         En ->
@@ -26,7 +26,7 @@ emailInfo locale =
             De.emailInfo
 
 
-greeting : Locale -> Translation { args | name : String } node
+greeting : Locale -> Text Static { args | name : String } node
 greeting locale =
     case locale of
         En ->
@@ -36,7 +36,7 @@ greeting locale =
             De.greeting
 
 
-missingInDe : Locale -> Translation args node
+missingInDe : Locale -> Text Static args node
 missingInDe locale =
     case locale of
         En ->
@@ -44,3 +44,13 @@ missingInDe locale =
 
         De ->
             De.missingInDe
+
+
+quotation : Locale -> Text Static args node
+quotation locale =
+    case locale of
+        En ->
+            En.quotation
+
+        De ->
+            De.quotation

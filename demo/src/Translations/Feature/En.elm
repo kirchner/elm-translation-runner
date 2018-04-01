@@ -1,52 +1,57 @@
 module Translations.Feature.En exposing (..)
 
-import Translation exposing (..)
-import Translation.En exposing (..)
+import Cldr.En exposing (..)
+import Text exposing (..)
 
 
-documentationInfo : Translation { args | documentation : List node -> node } node
+documentationInfo : Text Static { args | documentation : List node -> node } node
 documentationInfo =
-    fallback "feature.documentationInfo" <|
-        concat
-            [ s "Please take a look at our "
-            , node .documentation "documentation" <|
-                s "documentation"
-            , s "."
-            ]
+    concat
+        [ s "Please take a look at our "
+        , node .documentation <|
+            s "documentation"
+        , s "."
+        ]
 
 
-emailInfo : Translation args node
+emailInfo : Text Static { args | count : Float } node
 emailInfo =
-    final "feature.emailInfo" <|
-        concat
-            [ s "You have "
-            , cardinal decimalLatnStandard .count "count" <|
-                { one =
-                    concat
-                        [ count
-                        , s " new email"
-                        ]
-                , other =
-                    concat
-                        [ count
-                        , s " new emails"
-                        ]
-                }
-            , s "."
-            ]
+    concat
+        [ s "You have "
+        , cardinal .count decimalLatnStandard [] <|
+            { one =
+                concat
+                    [ count
+                    , s " new email"
+                    ]
+            , other =
+                concat
+                    [ count
+                    , s " new emails"
+                    ]
+            }
+        , s "."
+        ]
 
 
-greeting : Translation { args | name : String } node
+greeting : Text Static { args | name : String } node
 greeting =
-    final "feature.greeting" <|
-        concat
-            [ s "Good morning, "
-            , string .name "name"
-            , s "!"
-            ]
+    concat
+        [ s "Good morning, "
+        , string .name
+        , s "!"
+        ]
 
 
-missingInDe : Translation args node
+missingInDe : Text Static args node
 missingInDe =
-    final "feature.missingInDe" <|
-        s "I am not translated to German."
+    s "I am not translated to German."
+
+
+quotation : Text Static args node
+quotation =
+    concat
+        [ s "They said: "
+        , delimited quote <|
+            s "Hello!"
+        ]

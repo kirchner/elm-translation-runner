@@ -9,10 +9,10 @@ module Error
 
 import Char
 import Dict exposing (Dict)
+import Generate
 import List.Extra as List
 import Parser
 import String.Extra as String
-import Translation.Generate as Translation
 
 
 type Error
@@ -29,7 +29,7 @@ type Error
         { localeName : String
         , filePath : String
         , scopeKey : ( List String, String )
-        , icuErrors : List Translation.Error
+        , icuErrors : List Generate.Error
         }
     | JSONSyntax
         { localeName : String
@@ -141,7 +141,7 @@ printIcuError :
         , filePath : String
         , scopeKey : ( List String, String )
     }
-    -> Translation.Error
+    -> Generate.Error
     -> String
 printIcuError data icuError =
     let
@@ -193,7 +193,7 @@ printIcuError data icuError =
                 |> indent
     in
     case icuError of
-        Translation.ParserError parserError ->
+        Generate.ParserError parserError ->
             [ title "icu syntax error" data.filePath
             , [ "A translation for the locale "
               , yellowText data.localeName
@@ -228,9 +228,9 @@ printIcuError data icuError =
             ]
                 |> String.join "\n\n"
 
-        Translation.ArgumentError argumentError ->
+        Generate.ArgumentError argumentError ->
             case argumentError.problem of
-                Translation.BadArgument ->
+                Generate.BadArgument ->
                     [ title "undeducable argument type" data.filePath
                     , [ "We cannot deduce any argument type from the names "
                       , [ "[ "
@@ -251,7 +251,7 @@ printIcuError data icuError =
                     ]
                         |> String.join "\n\n"
 
-                Translation.ExpectingSingleUnnamedSubMessage ->
+                Generate.ExpectingSingleUnnamedSubMessage ->
                     [ title "expecting single unnamed submessage" data.filePath
                     , [ "We expected only a single unnamed submessage for the placeholder "
                       , yellowText argumentError.placeholder
@@ -277,7 +277,7 @@ printIcuError data icuError =
                     ]
                         |> String.join "\n\n"
 
-                Translation.ExpectingOnlyUnnamedSubMessages ->
+                Generate.ExpectingOnlyUnnamedSubMessages ->
                     [ title "expecting only unnamed submessages" data.filePath
                     , [ "We expected unnamed submessages for the placeholder "
                       , yellowText argumentError.placeholder
@@ -293,7 +293,7 @@ printIcuError data icuError =
                     ]
                         |> String.join "\n\n"
 
-                Translation.ExpectingOnlyNamedSubMessages expectedNames ->
+                Generate.ExpectingOnlyNamedSubMessages expectedNames ->
                     [ title "expecting named submessages" data.filePath
                     , [ "We expected the submessages of the placeholder "
                       , yellowText argumentError.placeholder

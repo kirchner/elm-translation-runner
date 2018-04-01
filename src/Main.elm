@@ -1,18 +1,17 @@
 module Main exposing (main)
 
-import Char
+import Data.Pluralization as Pluralization exposing (Pluralization)
 import Data.Printer as Printer exposing (Printer)
 import Dict exposing (Dict)
 import Error exposing (Error, mapDictWithErrors, mapWithErrors)
+import Generate
 import Json.Decode as Decode exposing (Decoder, Value)
 import Json.Decode.Pipeline as Decode
 import Json.Encode as Encode
-import Parser
 import Platform exposing (programWithFlags)
 import Ports
 import Set exposing (Set)
 import String.Extra as String
-import Translation.Generate
 
 
 main : Program Value Model Msg
@@ -56,7 +55,7 @@ type alias Config =
     , locales : List LocaleConfig
     , onlyFor : Maybe String
     , for : Maybe (List String)
-    , printers : Dict String (List Printer)
+    , cldrHelper : Dict String CldrHelper
     }
 
 
@@ -65,6 +64,19 @@ type alias LocaleConfig =
     , code : String
     , filePath : String
     , fallbacks : List String
+    }
+
+
+type alias CldrHelper =
+    { printers : List Printer
+    , pluralizations : List Pluralization
+    }
+
+
+emptyCldrHelper : CldrHelper
+emptyCldrHelper =
+    { printers = []
+    , pluralizations = []
     }
 
 
@@ -83,7 +95,14 @@ configDecoder =
         |> Decode.required "locales" (Decode.list localeConfigDecoder)
         |> Decode.required "only-for" (Decode.nullable Decode.string)
         |> Decode.required "for" (Decode.nullable (Decode.list Decode.string))
-        |> Decode.required "printers" (Decode.dict (Decode.list Printer.decoder))
+        |> Decode.required "cldr" (Decode.dict cldrHelperDecoder)
+
+
+cldrHelperDecoder : Decoder CldrHelper
+cldrHelperDecoder =
+    Decode.succeed CldrHelper
+        |> Decode.required "printers" (Decode.list Printer.decoder)
+        |> Decode.required "pluralizations" (Decode.list Pluralization.decoder)
 
 
 localeConfigDecoder : Decoder LocaleConfig
@@ -200,16 +219,15 @@ processFiles model =
                                 Dict.get localeConfig.filePath model.files
                                     |> Maybe.withDefault "{}"
                         in
-                        case Dict.get localeConfig.name model.config.printers of
-                            Just printers ->
-                                processFile printers
-                                    localeConfig.name
-                                    localeConfig.filePath
-                                    content
-                                    |> Result.map (\translations -> ( localeConfig.name, translations ))
-
-                            Nothing ->
-                                Debug.crash "TODO"
+                        Dict.get localeConfig.name model.config.cldrHelper
+                            |> Maybe.withDefault emptyCldrHelper
+                            |> (\{ printers } ->
+                                    processFile printers
+                                        localeConfig.name
+                                        localeConfig.filePath
+                                        content
+                                        |> Result.map (\translations -> ( localeConfig.name, translations ))
+                               )
                     )
                 |> Result.map Dict.fromList
                 |> Result.andThen
@@ -418,7 +436,7 @@ processFile printers locale path content =
             translations
                 |> mapDictWithErrors
                     (\( scope, name ) content ->
-                        Translation.Generate.final toArgument scope name content
+                        Generate.function toArgument scope name content
                             |> Result.mapError
                                 (\icuErrors ->
                                     Error.IcuErrors
@@ -430,7 +448,7 @@ processFile printers locale path content =
                                 )
                             |> Result.andThen
                                 (\final ->
-                                    Translation.Generate.fallback toArgument scope name content
+                                    Generate.function toArgument scope name content
                                         |> Result.mapError
                                             (\icuErrors ->
                                                 Error.IcuErrors
@@ -442,7 +460,7 @@ processFile printers locale path content =
                                             )
                                         |> Result.andThen
                                             (\fallback ->
-                                                Translation.Generate.typeSignature toArgument content
+                                                Generate.typeSignature toArgument content
                                                     |> Result.mapError
                                                         (\icuErrors ->
                                                             Error.IcuErrors
@@ -464,10 +482,10 @@ processFile printers locale path content =
         toArgument names =
             case names of
                 [] ->
-                    Just Translation.Generate.String
+                    Just Generate.String
 
                 "node" :: [] ->
-                    Just Translation.Generate.Node
+                    Just Generate.Node
 
                 "plural" :: otherNames ->
                     printers
@@ -478,7 +496,7 @@ processFile printers locale path content =
                             (\printer ->
                                 if printer.type_ == Printer.Float then
                                     Just <|
-                                        Translation.Generate.Cardinal
+                                        Generate.Cardinal
                                             { name = printer.name
                                             , moduleName = printer.module_
                                             }
@@ -495,7 +513,7 @@ processFile printers locale path content =
                             (\printer ->
                                 if printer.type_ == Printer.Float then
                                     Just <|
-                                        Translation.Generate.Ordinal
+                                        Generate.Ordinal
                                             { name = printer.name
                                             , moduleName = printer.module_
                                             }
@@ -518,22 +536,22 @@ processFile printers locale path content =
                                 in
                                 case printer.type_ of
                                     Printer.Delimited ->
-                                        Translation.Generate.Delimited function
+                                        Generate.Delimited function
 
                                     Printer.StaticList ->
-                                        Translation.Generate.StaticList function
+                                        Generate.StaticList function
 
                                     Printer.List ->
-                                        Translation.Generate.List function
+                                        Generate.List function
 
                                     Printer.Float ->
-                                        Translation.Generate.Float function
+                                        Generate.Float function
 
                                     Printer.Date ->
-                                        Translation.Generate.Date function
+                                        Generate.Date function
 
                                     Printer.Time ->
-                                        Translation.Generate.Time function
+                                        Generate.Time function
                             )
     in
     content
@@ -667,8 +685,8 @@ generateTranslationFiles modulePrefix moduleName localeConfig translationCodes =
                     [ [ moduleDeclaration
                             (modulePrefix ++ (moduleName :: sanitizedScope))
                             sanitizedName
-                      , [ import_ [] "Translation"
-                        , import_ [ "Translation" ] sanitizedCode
+                      , [ import_ [] ("Cldr." ++ sanitizedCode)
+                        , import_ [] "Text"
                         ]
                             |> joinLines
                       ]
@@ -739,7 +757,7 @@ generateTranslationRouterFiles modulePrefix moduleName locales translations =
                 , content =
                     [ [ moduleDeclaration directory name
                       , [ [ import_ modulePrefix "Locales"
-                          , importExposing [ "Translation" ] [] "Translation"
+                          , importExposing [ "Static", "Text" ] [] "Text"
                           ]
                         , locales
                             |> List.map (.name >> String.toSentenceCase)
@@ -839,7 +857,7 @@ generateTrivialTranslationRouterFiles modulePrefix moduleName localeName transla
                 , name = name
                 , content =
                     [ [ moduleDeclaration directory name
-                      , [ importExposing [ "Translation" ] [] "Translation"
+                      , [ importExposing [ "Static", "Text" ] [] "Text"
                         , localeName
                             |> String.toSentenceCase
                             |> qualifiedImport (directory ++ [ name ])

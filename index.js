@@ -82,7 +82,7 @@ var generateElm = function(argv) {
       config["for"] = null;
     }
 
-    config["printers"] = JSON.parse(fs.readFileSync("../../elm-cldr/generated.json"));
+    config["cldr"] = JSON.parse(fs.readFileSync("../../elm-cldr/generated.json"));
 
     var Elm = require("./main.js");
 

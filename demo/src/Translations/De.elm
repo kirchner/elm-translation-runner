@@ -1,10 +1,9 @@
 module Translations.De exposing (..)
 
-import Translation exposing (..)
-import Translation.De exposing (..)
+import Cldr.De exposing (..)
+import Text exposing (..)
 
 
-applicationName : Translation args node
+applicationName : Text Static args node
 applicationName =
-    final "applicationName" <|
-        s "Yet Another Email Client"
+    s "Yet Another Email Client"

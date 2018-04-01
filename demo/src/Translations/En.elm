@@ -1,10 +1,9 @@
 module Translations.En exposing (..)
 
-import Translation exposing (..)
-import Translation.En exposing (..)
+import Cldr.En exposing (..)
+import Text exposing (..)
 
 
-applicationName : Translation args node
+applicationName : Text Static args node
 applicationName =
-    fallback "applicationName" <|
-        s "Yet Another Email Client"
+    s "Yet Another Email Client"

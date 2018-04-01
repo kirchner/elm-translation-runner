@@ -2,6 +2,7 @@
   "feature": {
     "greeting": "Good morning, {name}!",
     "emailInfo": "You have {count, plural, decimal, latn, standard, one{# new email} other{# new emails}}.",
-    "missingInDe": "I am not translated to German."
+    "missingInDe": "I am not translated to German.",
+    "quotation": "They said: {_, quote, {Hello!}}"
   }
 }
