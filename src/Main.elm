@@ -219,10 +219,12 @@ processFiles model =
                                 Dict.get localeConfig.filePath model.files
                                     |> Maybe.withDefault "{}"
                         in
-                        Dict.get localeConfig.name model.config.cldrHelper
+                        Dict.get localeConfig.code model.config.cldrHelper
                             |> Maybe.withDefault emptyCldrHelper
-                            |> (\{ printers } ->
-                                    processFile printers
+                            |> (\{ printers, pluralizations } ->
+                                    processFile
+                                        printers
+                                        pluralizations
                                         localeConfig.name
                                         localeConfig.filePath
                                         content
@@ -400,19 +402,20 @@ reportError error =
 
 
 type alias TranslationCode =
-    { final : String
-    , fallback : String
+    { final : ( String, Set String )
+    , fallback : ( String, Set String )
     , typeSignature : String
     }
 
 
 processFile :
     Dict String Printer
+    -> Dict String Pluralization
     -> String
     -> String
     -> String
     -> Result Error (Dict ( List String, String ) TranslationCode)
-processFile printers locale path content =
+processFile printers pluralizations locale path content =
     let
         flattenDirectory scope directory =
             case directory of
@@ -471,10 +474,7 @@ processFile printers locale path content =
                                                                 }
                                                         )
                                                     |> Result.map
-                                                        (TranslationCode
-                                                            (Tuple.first final)
-                                                            (Tuple.first fallback)
-                                                        )
+                                                        (TranslationCode final fallback)
                                             )
                                 )
                     )
@@ -492,66 +492,60 @@ processFile printers locale path content =
                 "node" :: [] ->
                     Just Generate.Node
 
-                "plural" :: otherNames ->
-                    printers
-                        |> Dict.get (camelizeNames otherNames)
-                        |> Maybe.andThen
-                            (\printer ->
-                                if printer.type_ == Printer.Float then
-                                    Just <|
-                                        Generate.Cardinal
-                                            { name = camelizeNames otherNames
-                                            , moduleName = printer.module_
-                                            }
-                                else
-                                    Nothing
-                            )
+                name :: otherNames ->
+                    case
+                        pluralizations
+                            |> Dict.get name
+                    of
+                        Just pluralization ->
+                            printers
+                                |> Dict.get (camelizeNames otherNames)
+                                |> Maybe.andThen
+                                    (\printer ->
+                                        if printer.type_ == Printer.Float then
+                                            Just <|
+                                                Generate.Cardinal
+                                                    pluralization.pluralForms
+                                                    { name = name
+                                                    , moduleName = pluralization.module_
+                                                    }
+                                                    { name = camelizeNames otherNames
+                                                    , moduleName = printer.module_
+                                                    }
+                                        else
+                                            Nothing
+                                    )
 
-                "selectordinal" :: otherNames ->
-                    printers
-                        |> Dict.get (camelizeNames otherNames)
-                        |> Maybe.andThen
-                            (\printer ->
-                                if printer.type_ == Printer.Float then
-                                    Just <|
-                                        Generate.Ordinal
-                                            { name = camelizeNames otherNames
-                                            , moduleName = printer.module_
-                                            }
-                                else
-                                    Nothing
-                            )
+                        Nothing ->
+                            printers
+                                |> Dict.get (camelizeNames names)
+                                |> Maybe.map
+                                    (\printer ->
+                                        let
+                                            function =
+                                                { name = camelizeNames names
+                                                , moduleName = printer.module_
+                                                }
+                                        in
+                                        case printer.type_ of
+                                            Printer.Delimited ->
+                                                Generate.Delimited function
 
-                _ ->
-                    printers
-                        |> Dict.get (camelizeNames names)
-                        |> Maybe.map
-                            (\printer ->
-                                let
-                                    function =
-                                        { name = camelizeNames names
-                                        , moduleName = printer.module_
-                                        }
-                                in
-                                case printer.type_ of
-                                    Printer.Delimited ->
-                                        Generate.Delimited function
+                                            Printer.StaticList ->
+                                                Generate.StaticList function
 
-                                    Printer.StaticList ->
-                                        Generate.StaticList function
+                                            Printer.List ->
+                                                Generate.List function
 
-                                    Printer.List ->
-                                        Generate.List function
+                                            Printer.Float ->
+                                                Generate.Float function
 
-                                    Printer.Float ->
-                                        Generate.Float function
+                                            Printer.Date ->
+                                                Generate.Date function
 
-                                    Printer.Date ->
-                                        Generate.Date function
-
-                                    Printer.Time ->
-                                        Generate.Time function
-                            )
+                                            Printer.Time ->
+                                                Generate.Time function
+                                    )
     in
     content
         |> Decode.decodeString directoryDecoder
@@ -570,7 +564,7 @@ processFile printers locale path content =
 collectTranslationCodeForLocale :
     LocaleConfig
     -> Dict String (Dict ( List String, String ) TranslationCode)
-    -> Result Error (Dict ( List String, String ) String)
+    -> Result Error (Dict ( List String, String ) ( String, Set String ))
 collectTranslationCodeForLocale localeConfig translations =
     let
         keys =
@@ -647,21 +641,21 @@ generateTranslationFiles :
     List String
     -> String
     -> LocaleConfig
-    -> Dict ( List String, String ) String
+    -> Dict ( List String, String ) ( String, Set String )
     -> List File
 generateTranslationFiles modulePrefix moduleName localeConfig translationCodes =
     translationCodes
         |> Dict.foldl
-            (\( scope, key ) code byModule ->
+            (\( scope, key ) ( code, imports ) byModule ->
                 byModule
                     |> Dict.update scope
                         (\maybeCodes ->
                             case maybeCodes of
                                 Nothing ->
-                                    Just [ ( key, code ) ]
+                                    Just [ ( key, ( code, imports ) ) ]
 
                                 Just codes ->
-                                    Just (( key, code ) :: codes)
+                                    Just (( key, ( code, imports ) ) :: codes)
                         )
             )
             Dict.empty
@@ -684,7 +678,18 @@ generateTranslationFiles modulePrefix moduleName localeConfig translationCodes =
                     [ [ moduleDeclaration
                             (modulePrefix ++ (moduleName :: sanitizedScope))
                             sanitizedName
-                      , [ import_ [] ("Cldr." ++ sanitizedCode)
+                      , [ translations
+                            |> List.foldl
+                                (\( _, ( _, imports ) ) allImports ->
+                                    Set.union imports allImports
+                                )
+                                Set.empty
+                            |> Set.toList
+                            |> List.map
+                                (\importForTranslation ->
+                                    simpleImport importForTranslation
+                                )
+                            |> joinLines
                         , import_ [] "Text"
                         ]
                             |> joinLines
@@ -692,7 +697,7 @@ generateTranslationFiles modulePrefix moduleName localeConfig translationCodes =
                         |> joinLinesWith 1
                     , translations
                         |> List.sortBy Tuple.first
-                        |> List.map Tuple.second
+                        |> List.map (Tuple.second >> Tuple.first)
                         |> joinLinesWith 2
                     ]
                         |> joinLinesWith 2
@@ -982,6 +987,12 @@ import_ modules name =
     , "exposing (..)"
     ]
         |> String.join " "
+
+
+simpleImport : String -> String
+simpleImport module_ =
+    String.join " "
+        [ "import", module_ ]
 
 
 importExposing : List String -> List String -> String -> String

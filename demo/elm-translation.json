@@ -5,7 +5,7 @@
     "locales": [
         {
             "name": "en",
-            "code": "en",
+            "code": "en-US-POSIX",
             "file-path": "./translations/en.json",
             "fallbacks": [ "de" ]
         },

@@ -31,6 +31,7 @@ import Dict exposing (Dict)
 import Icu
 import Parser
 import Set exposing (Set)
+import Text exposing (PluralForm(Few, Many, One, Other, Two, Zero))
 
 
 type Argument
@@ -42,7 +43,7 @@ type Argument
     | Float Function
     | Date Function
     | Time Function
-    | Cardinal Function
+    | Cardinal (List PluralForm) Function Function
     | Ordinal Function
 
 
@@ -227,7 +228,17 @@ partToElm toArgType source part =
     let
         simplePlaceholder tvpe name function =
             String.join " "
-                [ tvpe, accessor name, function.name ]
+                [ tvpe
+                , accessor name
+                , qualifiedFunctionCall function
+                ]
+
+        qualifiedFunctionCall function =
+            String.concat
+                [ function.moduleName
+                , "."
+                , function.name
+                ]
     in
     case part of
         Icu.Text text ->
@@ -299,7 +310,10 @@ partToElm toArgType source part =
                                     (\( elm, imports ) ->
                                         ( lines
                                             [ String.join " "
-                                                [ "delimited", function.name, "<|" ]
+                                                [ "delimited"
+                                                , qualifiedFunctionCall function
+                                                , "<|"
+                                                ]
                                             , indent elm
                                             ]
                                         , Set.insert function.moduleName imports
@@ -319,7 +333,7 @@ partToElm toArgType source part =
                                         ( lines
                                             [ lines
                                                 [ "list"
-                                                , function.name
+                                                , qualifiedFunctionCall function
                                                 ]
                                             , listElm
                                                 |> List.map Tuple.first
@@ -383,7 +397,8 @@ partToElm toArgType source part =
                         , Set.singleton function.moduleName
                         )
 
-                Just (Cardinal function) ->
+                Just (Cardinal pluralForms pluralizationFunction function) ->
+                    -- TODO check pluralForms
                     case unnamed of
                         [] ->
                             named
@@ -411,7 +426,8 @@ partToElm toArgType source part =
                                     (\listNamedElm ->
                                         ( lines
                                             [ String.join " "
-                                                [ simplePlaceholder "cardinal"
+                                                [ simplePlaceholder
+                                                    (qualifiedFunctionCall pluralizationFunction)
                                                     placeholder
                                                     function
                                                 , "[] <|"
@@ -625,7 +641,7 @@ argsFromPart toArgType source part =
                 Just (Time _) ->
                     Ok (Dict.singleton placeholder "Time")
 
-                Just (Cardinal _) ->
+                Just (Cardinal _ _ _) ->
                     case unnamed of
                         [] ->
                             named

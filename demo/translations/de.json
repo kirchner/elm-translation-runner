@@ -3,6 +3,6 @@
   "feature": {
     "greeting": "Guten morgen, {name}!",
     "documentationInfo": "Please take a look at our {documentation, node, {documentation}}.",
-    "emailInfo": "Du hast {count, plural, decimal, latn, standard, one{# neue Email} other{# neue Emails}}."
+    "emailInfo": "Du hast {count, cardinal, decimal, latn, standard, one{# neue Email} other{# neue Emails}}."
   }
 }

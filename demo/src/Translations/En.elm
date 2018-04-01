@@ -1,6 +1,6 @@
 module Translations.En exposing (..)
 
-import Cldr.En exposing (..)
+
 import Text exposing (..)
 
 

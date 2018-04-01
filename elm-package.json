@@ -4,7 +4,8 @@
     "repository": "https://github.com/kirchner/elm-translation-runner.git",
     "license": "Apache-2.0",
     "source-directories": [
-        "src"
+        "src",
+        "../elm-translation/src"
     ],
     "exposed-modules": [],
     "dependencies": {

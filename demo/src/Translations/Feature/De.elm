@@ -1,6 +1,7 @@
 module Translations.Feature.De exposing (..)
 
-import Cldr.De exposing (..)
+import Cldr.De
+import Cldr.En.US.POSIX
 import Text exposing (..)
 
 
@@ -18,7 +19,7 @@ emailInfo : Text Static { args | count : Float } node
 emailInfo =
     concat
         [ s "Du hast "
-        , cardinal .count decimalLatnStandard [] <|
+        , Cldr.De.cardinal .count Cldr.De.decimalLatnStandard [] <|
             { one =
                 concat
                     [ count
@@ -52,6 +53,6 @@ quotation : Text Static args node
 quotation =
     concat
         [ s "They said: "
-        , delimited quote <|
+        , delimited Cldr.En.US.POSIX.quote <|
             s "Hello!"
         ]

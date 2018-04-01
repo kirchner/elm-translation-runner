@@ -1,6 +1,6 @@
 module Translations.De exposing (..)
 
-import Cldr.De exposing (..)
+
 import Text exposing (..)
 
 
